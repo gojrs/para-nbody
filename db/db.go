@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/gojrs/para-nbody/types"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // Internal, non-exported variable to hold the connection
@@ -24,14 +25,15 @@ func SetDB(conn *sql.DB) error {
 	_, _ = store.Exec("PRAGMA busy_timeout=5000;")
 
 	query := `
-	CREATE TABLE IF NOT EXISTS runs (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		label TEXT,
-		config TEXT,
-		result TEXT,
-		parent_id INTEGER,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-	);`
+CREATE TABLE IF NOT EXISTS runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    experiment TEXT NOT NULL,         -- THE MISSING MOLE
+    label TEXT,
+    config TEXT,
+    result TEXT,
+    parent_run_id INTEGER,           -- Ensure this matches your SaveRun too
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);`
 	_, err := store.Exec(query)
 	return err
 }

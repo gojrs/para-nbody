@@ -88,6 +88,19 @@ func main() {
 
 // initLocalDB is your existing local initialization helper
 func initLocalDB(path string) (*sql.DB, error) {
-	// Ensure you have the 'database/sql' and sqlite driver imported
-	// Or use your existing helper function logic here
+	// 1. Open the connection using the sqlite3 driver
+	dbConn, err := sql.Open("sqlite3", path)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Test the connection immediately
+	if err := dbConn.Ping(); err != nil {
+		return nil, err
+	}
+
+	// 3. Optional: Set Concurrency Tuning for SQLite
+	dbConn.SetMaxOpenConns(1)
+
+	return dbConn, nil
 }

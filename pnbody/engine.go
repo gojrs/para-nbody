@@ -260,22 +260,13 @@ func (s *nbodySim) filterDead(dead []bool) {
 
 func generateResult(s *nbodySim) types.NBodyResult {
 	m, am, maxM := 0, 0, 0.0
-
-	// Safety: Handle the "Empty Universe" scenario
-	if len(s.particles) == 0 {
-		return types.NBodyResult{
-			Config:         s.cfg,
-			StepsCompleted: s.cfg.Steps,
-		}
-	}
-
 	for _, p := range s.particles {
 		if p.IsMatter() {
 			m++
 		} else {
 			am++
 		}
-		// The structural "Planet" check
+		// WHACK THE MOLE: Find the largest mass in the 3D void
 		if p.Mass > maxM {
 			maxM = p.Mass
 		}
@@ -289,7 +280,7 @@ func generateResult(s *nbodySim) types.NBodyResult {
 		AnnihilationCount: s.annihilationCount,
 		MergeCount:        s.mergeCount,
 		PocketCount:       s.pocketCount,
-		MaxMass:           float64(maxM), // Changed to float64 for precision
+		MaxMass:           maxM, // PASS THE DATA HERE
 		StepsCompleted:    s.cfg.Steps,
 		FinalParticles:    s.particles,
 	}
