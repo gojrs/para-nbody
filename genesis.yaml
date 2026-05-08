@@ -1,0 +1,37 @@
+# GSON Lab Environment: Genesis Seed #1
+# This file populates the initial SQL state and defines the "Sane Default" Universe.
+
+seed_metadata:
+  seed_id: 1
+  name: "The Standard Bridge"
+  description: "Standard Model geometry with balanced Paving/Escrow ratios."
+
+referee_constants:
+  creation_bias: 0.85      # Propensity to turn Escrow into Matter
+  matrix_throughput: 1.0   # Speed of light (c) - 1 dot per tick
+  spleef_constant: 1.0     # Gravity/Mass scaling multiplier
+  expansion_rate: 0.05     # Map growth speed when Escrow is high
+  energy_threshold: 100.0  # Extra E needed to pave a new 3D Spacetime Dot
+
+lifeguard_rules:
+  exclusion_logic: true    # Prevent mass overlap in the same Dot
+  decay_vitals_limit: 0.1  # Trigger "Snap" warning at 10% structural integrity
+  audit_max_retries: 5     # How many times Ref can "Try Again" before LG kills a particle
+
+# The "Starter Pack" of stable recipes
+particle_library:
+  - type_id: "Standard_Mass"
+    mass_weight: 1.0
+    charge_weight: 0.0
+    spin_weight: 0.5
+    auto_geometry: true
+
+  - type_id: "Standard_Charge"
+    mass_weight: 0.1
+    charge_weight: 1.0
+    spin_weight: 1.0
+    auto_geometry: true
+
+storage_config:
+  driver: "sqlite"         # Or "localstore" for the browser PoC
+  auto_save_interval: 1000 # Save Survivor Reports every 1k ticks

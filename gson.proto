@@ -1,0 +1,117 @@
+syntax = "proto3";
+
+package gson.v1;
+
+// The Universal Interface for the Smarter Being (SB)
+// This defines the "Laws" and the "State" for the Go/WASM Engine.
+
+service SmarterBeingBridge {
+  // God-Mode Controls
+  rpc InitializeUniverse(UniverseSeed) returns (EngineStatus);
+  rpc InjectParticle(ParticleRecipe) returns (ActionResult);
+
+  // The "Step" Audit Loop
+  rpc RequestNextStep(MapDraft) returns (AuditReport);
+  rpc CommitStep(MapFinal) returns (EngineStatus);
+
+  // The Lab / Export
+  rpc ExportSurvivorPic(TimeRange) returns (SurvivorReport);
+}
+
+// ---------------------------------------------------------
+// 1. THE SEED (The DNA / Row 1)
+// ---------------------------------------------------------
+message UniverseSeed {
+  int64 seed_id = 1;
+  double creation_bias = 2;     // Tendency to form matter from Escrow
+  double matrix_throughput = 3; // Speed of light (c) / Paving Speed
+  double spleef_constant = 4;   // Gravitational/Mass scaling
+  double expansion_rate = 5;    // Rate of new 3D Spacetime creation
+  double energy_threshold = 6;  // E required to pave a new Dot
+}
+
+// ---------------------------------------------------------
+// 2. THE PARTICLE (The Recipe & Resulting Force)
+// ---------------------------------------------------------
+message ParticleRecipe {
+  string type_id = 1;           // e.g., "Electron", "Custom_Ghost"
+
+  // Weights (The Metadata)
+  double mass_weight = 2;       // Pillar Depth (Spleef intensity)
+  double charge_weight = 3;     // Surface Tension (EM intensity)
+  double spin_weight = 4;       // Matrix Strip Torsion (Twist intensity)
+
+  // Predictors (The Geometric Effect)
+  bool auto_geometry = 5;       // If true, engine derives forces from Simplex shape
+  Vector3 field_distortion = 6; // The manual override for field effects
+}
+
+// ---------------------------------------------------------
+// 3. THE WORKER (The Active Gold Object)
+// ---------------------------------------------------------
+message Worker {
+  int64 worker_id = 1;
+  string recipe_id = 2;
+  Vector3 position = 3;
+  Vector3 velocity = 4;
+  double vitals = 5;            // Structural integrity (Distance to Snap)
+  bool is_liquidated = 6;       // Marked for Death by LG
+}
+
+// ---------------------------------------------------------
+// 4. THE LIFEGUARD & REFEREE DYNAMICS
+// ---------------------------------------------------------
+message MapDraft {
+  int64 tick_index = 1;
+  repeated Worker proposed_moves = 2;
+}
+
+message AuditReport {
+  bool is_legal = 1;            // LG's final word
+  repeated int64 death_list = 2; // Workers marked for Liquidation
+  double escrow_delta = 3;      // Energy recovered from Snap/Decay
+  repeated Correction corrections = 4; // LG's "Try Again" suggestions
+}
+
+message MapFinal {
+  int64 tick_index = 1;
+  repeated Worker active_workers = 2;
+  double current_escrow = 3;    // Total "Extra E" in the vacuum
+  int64 total_paved_dots = 4;   // Map expansion metric
+}
+
+// ---------------------------------------------------------
+// 5. UTILITY TYPES
+// ---------------------------------------------------------
+message Vector3 {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+message Correction {
+  int64 worker_id = 1;
+  Vector3 safe_position = 2;    // Where the LG allows the Ref to pave
+}
+
+message EngineStatus {
+  bool running = 1;
+  int32 active_goroutines = 2;
+  double tick_latency_ms = 3;
+}
+
+message ActionResult {
+  bool success = 1;
+  string message = 2;
+}
+
+message TimeRange {
+  int64 start_tick = 1;
+  int64 end_tick = 2;
+}
+
+message SurvivorReport {
+  bytes pic_data = 1;           // The Fading Path Image
+  int32 survivors_count = 2;
+  repeated string stable_recipes = 3;
+}
