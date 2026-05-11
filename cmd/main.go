@@ -37,11 +37,11 @@ func main() {
 	router := gin.Default()
 
 	// Routes matching your existing API structure
-	apiV1 := router.Group("/api/pnbody")
+	apiV1Pn := router.Group("/api/v1/pnbody")
 	{
-		apiV1.POST("/", handlers.HandlePNBody)
-		apiV1.POST("/by/:id", handlers.HandlePNBodyByID)
-		apiV1.POST("/with/", handlers.HandlePNBodyIni)
+		apiV1Pn.POST("/", handlers.HandlePNBody)
+		apiV1Pn.POST("/by/:id", handlers.HandlePNBodyByID)
+		apiV1Pn.POST("/with/", handlers.HandlePNBodyIni)
 	}
 
 	// 3. Configure the HTTP Server
