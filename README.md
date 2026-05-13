@@ -1,9 +1,3 @@
-This `README_MECHANICS.md` is excellent. It serves as the "Operating Manual for Reality" within your repo. It captures that specific "Right for the Wrong Reason" spirit by admitting that the complexity isn't in magic math, but in the **Paving Logistics** of the Referee.
-
-I have taken your draft and integrated the **Triple-Contract (YAML/Proto/SQL)** and the **Escrow Logic** we just finalized. This version bridges the "Bumpy Floor" philosophy with the "Smarter Being" data architecture.
-
----
-
 # 📂 GCC Project: Simulation Mechanics & Logic Ledger
 
 ## 1. The Core Philosophy: "The Floor is Bumpy"
