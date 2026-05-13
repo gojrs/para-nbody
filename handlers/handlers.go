@@ -24,20 +24,28 @@ type PNBodyInitRequest struct {
 	Width  int               `json:"width"`
 	Height int               `json:"height"`
 	Depth  int               `json:"depth"`
+	X      *int              `json:"x,omitempty"`
+	Y      *int              `json:"y,omitempty"`
+	Z      *int              `json:"z,omitempty"`
 	Recipe types.Multivector `json:"recipe"`
 }
 
 func (h *Handler) RegisterRoutes(router *gin.Engine) {
-	router.GET("/pnbody", h.PNBody)
-	router.POST("/pnbody/init", h.PNBodyIni)
-	router.GET("/pnbody/:id", h.PNBodyByID)
-	router.POST("/pnbody/:id/run", h.RunSteps)
+	apiV1 := router.Group("/api/v1")
+	{
+		apiV1.GET("/pnbody", h.PNBody)
+		apiV1.POST("/pnbody/init", h.PNBodyIni)
+		apiV1.GET("/pnbody/:id", h.PNBodyByID)
+		apiV1.POST("/pnbody/:id/run", h.RunSteps)
+	}
 }
 
 // PNBody initializes the Genesis world.
 //
 // It creates a fresh 50x50x50 universe through WorldManager, hydrates one
 // Standard Pillar at the center, and returns the center voxel.
+// ... existing code ...
+
 func (h *Handler) PNBody(c *gin.Context) {
 	const (
 		width  = 50
@@ -49,9 +57,21 @@ func (h *Handler) PNBody(c *gin.Context) {
 		centerZ = 25
 	)
 
-	universeID := h.WorldManager.CreateUniverse(width, height, depth)
+	universeID, err := h.WorldManager.CreateUniverse(width, height, depth)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
 
-	world, ok := h.WorldManager.GetUniverse(universeID)
+	world, ok, err := h.WorldManager.GetUniverse(universeID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
 	if !ok {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "created universe could not be retrieved",
@@ -65,6 +85,13 @@ func (h *Handler) PNBody(c *gin.Context) {
 
 	world.HydratePillar(centerX, centerY, centerZ, standardPillar)
 
+	if err := h.WorldManager.UpdateUniverse(universeID, world); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"message":     "Genesis world initialized",
 		"universe_id": universeID,
@@ -75,19 +102,8 @@ func (h *Handler) PNBody(c *gin.Context) {
 	})
 }
 
-// PNBodyIni initializes a laboratory world from a JSON request.
-//
-// Expected JSON:
-//
-//	{
-//	  "width": 50,
-//	  "height": 50,
-//	  "depth": 50,
-//	  "recipe": {
-//	    "scalar": 0,
-//	    "v": [0, 0, 0, 100, 0]
-//	  }
-//	}
+// ... existing code ...
+
 func (h *Handler) PNBodyIni(c *gin.Context) {
 	var req PNBodyInitRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -104,9 +120,21 @@ func (h *Handler) PNBodyIni(c *gin.Context) {
 		return
 	}
 
-	universeID := h.WorldManager.CreateUniverse(req.Width, req.Height, req.Depth)
+	universeID, err := h.WorldManager.CreateUniverse(req.Width, req.Height, req.Depth)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
 
-	world, ok := h.WorldManager.GetUniverse(universeID)
+	world, ok, err := h.WorldManager.GetUniverse(universeID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
 	if !ok {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "created universe could not be retrieved",
@@ -118,7 +146,34 @@ func (h *Handler) PNBodyIni(c *gin.Context) {
 	y := rand.Intn(req.Height)
 	z := rand.Intn(req.Depth)
 
+	if req.X != nil || req.Y != nil || req.Z != nil {
+		if req.X == nil || req.Y == nil || req.Z == nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error": "x, y, and z must all be provided together",
+			})
+			return
+		}
+
+		x = *req.X
+		y = *req.Y
+		z = *req.Z
+	}
+
+	if x < 0 || x >= req.Width || y < 0 || y >= req.Height || z < 0 || z >= req.Depth {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "x, y, and z must be within world bounds",
+		})
+		return
+	}
+
 	world.HydratePillar(x, y, z, req.Recipe)
+
+	if err := h.WorldManager.UpdateUniverse(universeID, world); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"message":     "Laboratory world initialized",
@@ -130,11 +185,19 @@ func (h *Handler) PNBodyIni(c *gin.Context) {
 	})
 }
 
-// PNBodyByID resumes/retrieves a cached universe by ID.
+// ... existing code ...
+
 func (h *Handler) PNBodyByID(c *gin.Context) {
 	id := c.Param("id")
 
-	world, ok := h.WorldManager.GetUniverse(id)
+	world, ok, err := h.WorldManager.GetUniverse(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":       err.Error(),
+			"universe_id": id,
+		})
+		return
+	}
 	if !ok {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error":       "universe not found",
@@ -162,7 +225,14 @@ func (h *Handler) RunSteps(c *gin.Context) {
 		return
 	}
 
-	world, exists := h.WorldManager.GetUniverse(id)
+	world, exists, err := h.WorldManager.GetUniverse(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":       err.Error(),
+			"universe_id": id,
+		})
+		return
+	}
 	if !exists {
 		c.JSON(http.StatusNotFound, gin.H{
 			"error":       "universe not found",
@@ -173,6 +243,14 @@ func (h *Handler) RunSteps(c *gin.Context) {
 
 	for i := 0; i < steps; i++ {
 		world.Step()
+	}
+
+	if err := h.WorldManager.UpdateUniverse(id, world); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":       err.Error(),
+			"universe_id": id,
+		})
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{

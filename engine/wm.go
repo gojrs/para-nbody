@@ -1,44 +1,61 @@
 package engine
 
 import (
-	"time"
+	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/jellydator/ttlcache/v3"
 )
 
-type WorldManager struct {
-	cache *ttlcache.Cache[string, *World]
+type UniverseStore interface {
+	Create(id string, world *World) error
+	Get(id string) (*World, bool, error)
+	Update(id string, world *World) error
+	Delete(id string) error
+	Close() error
 }
 
-// NewWorldManager creates the manager and starts the TTL janitor
-func NewWorldManager() *WorldManager {
-	c := ttlcache.New[string, *World](
-		ttlcache.WithTTL[string, *World](30 * time.Minute),
-	)
+type WorldManager struct {
+	store UniverseStore
+}
 
-	// Start the expiration janitor in the background
-	go c.Start()
-
+// NewWorldManager creates the manager with a pluggable universe store.
+func NewWorldManager(store UniverseStore) *WorldManager {
 	return &WorldManager{
-		cache: c,
+		store: store,
 	}
 }
 
-// CreateUniverse initializes a world, saves it, and returns the ID
-func (m *WorldManager) CreateUniverse(w, h, d int) string {
+// CreateUniverse initializes a world, saves it, and returns the ID.
+func (m *WorldManager) CreateUniverse(w, h, d int) (string, error) {
 	id := uuid.New().String()
 	newWorld := NewWorld(w, h, d)
 
-	m.cache.Set(id, &newWorld, ttlcache.DefaultTTL)
-	return id
+	if err := m.store.Create(id, &newWorld); err != nil {
+		return "", fmt.Errorf("create universe %q: %w", id, err)
+	}
+
+	return id, nil
 }
 
-// GetUniverse retrieves a world by ID from the cache
-func (m *WorldManager) GetUniverse(id string) (*World, bool) {
-	item := m.cache.Get(id)
-	if item == nil || item.Value() == nil {
-		return nil, false
+// GetUniverse retrieves a world by ID from the store.
+func (m *WorldManager) GetUniverse(id string) (*World, bool, error) {
+	return m.store.Get(id)
+}
+
+// UpdateUniverse persists changes to an existing universe.
+func (m *WorldManager) UpdateUniverse(id string, world *World) error {
+	if err := m.store.Update(id, world); err != nil {
+		return fmt.Errorf("update universe %q: %w", id, err)
 	}
-	return item.Value(), true
+
+	return nil
+}
+
+// Stop shuts down the WorldManager store.
+func (m *WorldManager) Stop() {
+	if m == nil || m.store == nil {
+		return
+	}
+
+	_ = m.store.Close()
 }
