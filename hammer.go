@@ -4,13 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-
 	"net/http"
 
 	"github.com/gojrs/para-nbody/types"
 )
 
-// Response wrapper to match your Gin output
 type APIResponse struct {
 	ID     int64             `json:"id"`
 	Result types.NBodyResult `json:"result"`
@@ -20,10 +18,13 @@ func main() {
 	baseUrl := "http://localhost:42069/api/pnbody/"
 	repulsions := []float64{1.0, 10.0, 50.0, 100.0, 250.0, 500.0}
 
-	fmt.Println("🚀 Starting Typed 3D Sweep...")
+	fmt.Println("🚀 Starting Advanced 3D Cosmic Sweep...")
+	fmt.Println("-------------------------------------------------------------------------------------------------------")
+	fmt.Printf("%-10s | %-6s | %-12s | %-14s | %-15s | %-15s\n",
+		"Repulsion", "ID", "Total Active", "Max Peak Mass", "Matter Pockets", "Antimatter Voids")
+	fmt.Println("-------------------------------------------------------------------------------------------------------")
 
 	for _, r := range repulsions {
-		// 1. Setup Payload using the real Config struct
 		cfg := types.NBodyConfig{
 			N:                           500,
 			BoxSize:                     1000.0,
@@ -36,12 +37,20 @@ func main() {
 		jsonData, _ := json.Marshal(cfg)
 		resp, err := http.Post(baseUrl, "application/json", bytes.NewBuffer(jsonData))
 		if err != nil {
-			fmt.Printf("❌ Strength %.1f: Server Offline\n", r)
+			fmt.Printf("❌ Strength %5.1f: Server Offline\n", r)
 			continue
 		}
 
-		// 2. Decode using our APIResponse wrapper
-		var apiRes APIResponse
+		var apiRes struct {
+			ID     int64 `json:"id"`
+			Result struct {
+				FinalCount      int64   `json:"final_count"`
+				MaxMass         float64 `json:"max_mass"`
+				MatterPockets   int64   `json:"matter_pockets"`
+				AntimatterVoids int64   `json:"antimatter_voids"`
+			} `json:"result"`
+		}
+
 		if err := json.NewDecoder(resp.Body).Decode(&apiRes); err != nil {
 			fmt.Printf("❌ Strength %.1f: Decode Error: %v\n", r, err)
 			resp.Body.Close()
@@ -49,8 +58,8 @@ func main() {
 		}
 		resp.Body.Close()
 
-		// 3. Print the Audit
-		fmt.Printf("✅ Strength %5.1f | ID: %3d | Survivors: %4d | MaxMass: %4.1f\n",
-			r, apiRes.ID, apiRes.Result.FinalCount, apiRes.Result.MaxMass)
+		fmt.Printf("⚡ %8.1f | %3d  | %12d | %14.2f | %15d | %15d\n",
+			r, apiRes.ID, apiRes.Result.FinalCount, apiRes.Result.MaxMass,
+			apiRes.Result.MatterPockets, apiRes.Result.AntimatterVoids)
 	}
 }

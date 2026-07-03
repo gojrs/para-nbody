@@ -47,3 +47,9 @@ clean:
 
 reset-db:
 	rm -f $(DB_PATH) $(DB_PATH)-wal $(DB_PATH)-shm
+
+gem:
+	find . -name "*.go" -not -path "*/.*" -exec sh -c 'for f; do echo "=== FILE: $f ==="; cat "$f"; echo "\n"; done' _ {} + > consolidated_code-2.txt
+
+git:
+	git add . && git commit -m "Feat: Implement dynamic asymmetric tracer repulsion and fix mass accumulation" && git push

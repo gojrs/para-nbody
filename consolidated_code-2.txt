@@ -1,0 +1,958 @@
+=== FILE: ./cmd/main.go ===
+package main
+
+import (
+	"context"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/gojrs/para-nbody/engine"
+	"github.com/gojrs/para-nbody/handlers"
+	storage "github.com/gojrs/para-nbody/store"
+)
+
+func main() {
+	storeMode := os.Getenv("PNBODY_STORE")
+
+	var universeStore engine.UniverseStore
+	var err error
+
+	switch storeMode {
+	case "sqlite":
+		dbPath := os.Getenv("PNBODY_DB")
+		if dbPath == "" {
+			dbPath = filepath.Join(".", "dataset", "para-nbody-v2.store")
+		}
+
+		universeStore, err = storage.NewSQLiteStore(dbPath)
+		if err != nil {
+			log.Fatalf("Critical: Could not initialize SQLite store: %v", err)
+		}
+
+		log.Printf("Using SQLite universe store: %s", dbPath)
+
+	default:
+		universeStore = storage.NewTTLStore(30 * time.Minute)
+		log.Println("Using TTL universe store")
+	}
+
+	worldManager := engine.NewWorldManager(universeStore)
+	handler := handlers.NewHandler(worldManager)
+
+	// 2. Setup the Gin Engine
+	router := gin.Default()
+	handler.RegisterRoutes(router)
+
+	// 3. Configure the HTTP Server
+	srv := &http.Server{
+		Addr:    ":42069",
+		Handler: router,
+	}
+
+	// 4. Start the Server in a Goroutine
+	// This prevents the server from blocking the main thread
+	go func() {
+		log.Printf("GSON Systems Lab online at http://localhost%s", srv.Addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Listen error: %s\n", err)
+		}
+	}()
+
+	// 5. SAFE SHUTDOWN MOLE: Listen for interrupt signals
+	quit := make(chan os.Signal, 1)
+	// SIGINT = Ctrl+C, SIGTERM = Kill command
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	// Block here until a signal is received
+	// ... existing code ...
+
+	// Block here until a signal is received
+	<-quit
+	log.Println("Shutdown signal received. Closing the GSON Lab...")
+
+	// Create a context with a 10-second timeout for the shutdown process
+	// This gives active simulations time to finish saving to the database
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err = srv.Shutdown(ctx); err != nil {
+		log.Printf("Server forced to shutdown: %v", err)
+	}
+}
+
+
+=== FILE: ./types/ledger.go ===
+package types
+
+type LedgerState struct {
+	Fields Multivector `json:"fields"`
+	Energy float64     `json:"energy"`
+	Commit bool        `json:"commit"`
+}
+
+type Multivector struct {
+	Scalar float64    `json:"scalar"`
+	V      [5]float64 `json:"v"` // [0]:Spin, [1]:Electric, [2]:Magnetic, [3]:Matter (+W), [4]:Antimatter (-W)
+}
+
+func (m Multivector) Add(other Multivector) Multivector {
+	res := Multivector{Scalar: m.Scalar + other.Scalar}
+	for i := 0; i < 5; i++ {
+		res.V[i] = m.V[i] + other.V[i]
+	}
+	return res
+}
+
+func (m Multivector) Scale(factor float64) Multivector {
+	res := Multivector{Scalar: m.Scalar * factor}
+	for i := 0; i < 5; i++ {
+		res.V[i] = m.V[i] * factor
+	}
+	return res
+}
+
+// Matter Density (+W)
+func (m Multivector) Matter() float64 {
+	return m.V[3]
+}
+
+// Antimatter Density (-W)
+func (m Multivector) Antimatter() float64 {
+	return m.V[4]
+}
+
+// Net Gravitational Curvature Balance (This fixes the compilation error!)
+func (m Multivector) NetCurvature() float64 {
+	return m.V[3] - m.V[4]
+}
+
+// Request configuration payload sent by test scripts
+type NBodyConfig struct {
+	N                           int     `json:"n"`
+	BoxSize                     float64 `json:"box_size"`
+	MaxSpeed                    float64 `json:"max_speed"`
+	Steps                       int     `json:"steps"`
+	ParticleMass                float64 `json:"particle_mass"`
+	UnlikeMassRepulsionStrength float64 `json:"unlike_mass_repulsion_strength"`
+}
+
+type NBodyResult struct {
+	FinalCount int64   `json:"final_count"`
+	MaxMass    float64 `json:"max_mass"`
+}
+
+
+=== FILE: ./hammer.go ===
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+
+	"net/http"
+
+	"github.com/gojrs/para-nbody/types"
+)
+
+// Response wrapper to match your Gin output
+type APIResponse struct {
+	ID     int64             `json:"id"`
+	Result types.NBodyResult `json:"result"`
+}
+
+func main() {
+	baseUrl := "http://localhost:42069/api/pnbody/"
+	repulsions := []float64{1.0, 10.0, 50.0, 100.0, 250.0, 500.0}
+
+	fmt.Println("🚀 Starting Typed 3D Sweep...")
+
+	for _, r := range repulsions {
+		// 1. Setup Payload using the real Config struct
+		cfg := types.NBodyConfig{
+			N:                           500,
+			BoxSize:                     1000.0,
+			MaxSpeed:                    2.0,
+			Steps:                       500,
+			ParticleMass:                1.0,
+			UnlikeMassRepulsionStrength: r,
+		}
+
+		jsonData, _ := json.Marshal(cfg)
+		resp, err := http.Post(baseUrl, "application/json", bytes.NewBuffer(jsonData))
+		if err != nil {
+			fmt.Printf("❌ Strength %.1f: Server Offline\n", r)
+			continue
+		}
+
+		// 2. Decode using our APIResponse wrapper
+		var apiRes APIResponse
+		if err := json.NewDecoder(resp.Body).Decode(&apiRes); err != nil {
+			fmt.Printf("❌ Strength %.1f: Decode Error: %v\n", r, err)
+			resp.Body.Close()
+			continue
+		}
+		resp.Body.Close()
+
+		// 3. Print the Audit
+		fmt.Printf("✅ Strength %5.1f | ID: %3d | Survivors: %4d | MaxMass: %4.1f\n",
+			r, apiRes.ID, apiRes.Result.FinalCount, apiRes.Result.MaxMass)
+	}
+}
+
+
+=== FILE: ./pnbody/engine.go ===
+package pnbody
+
+
+=== FILE: ./pnbody/base.go ===
+package pnbody
+
+
+=== FILE: ./engine/world.go ===
+package engine
+
+import (
+	"math"
+
+	"github.com/gojrs/para-nbody/types"
+)
+
+type World struct {
+	Width             int                     `json:"width"`
+	Height            int                     `json:"height"`
+	Depth             int                     `json:"depth"`
+	RepulsionStrength float64                 `json:"repulsion_strength"`
+	Cells             [][][]types.LedgerState `json:"cells"`
+}
+
+func NewWorld(width, height, depth int) World {
+	world := World{
+		Width:             width,
+		Height:            height,
+		Depth:             depth,
+		RepulsionStrength: 1.0, // Default baseline behavior
+		Cells:             make([][][]types.LedgerState, width),
+	}
+
+	for x := 0; x < width; x++ {
+		world.Cells[x] = make([][]types.LedgerState, height)
+		for y := 0; y < height; y++ {
+			world.Cells[x][y] = make([]types.LedgerState, depth)
+			for z := 0; z < depth; z++ {
+				world.Cells[x][y][z] = types.LedgerState{}
+			}
+		}
+	}
+	return world
+}
+
+func (w *World) HydratePillar(x, y, z int, recipe types.Multivector) {
+	if x < 0 || x >= w.Width || y < 0 || y >= w.Height || z < 0 || z >= w.Depth {
+		return
+	}
+	current := w.Cells[x][y][z]
+	current.Fields = current.Fields.Add(recipe)
+	current.Energy = current.Fields.NetCurvature()
+	current.Commit = false
+	w.Cells[x][y][z] = current
+}
+
+// Deep copy helper to safely prevent multi-threaded data corruption
+func (w *World) CloneCells() [][][]types.LedgerState {
+	cloned := make([][][]types.LedgerState, w.Width)
+	for x := 0; x < w.Width; x++ {
+		cloned[x] = make([][]types.LedgerState, w.Height)
+		for y := 0; y < w.Height; y++ {
+			cloned[x][y] = make([]types.LedgerState, w.Depth)
+			copy(cloned[x][y], w.Cells[x][y])
+		}
+	}
+	return cloned
+}
+
+func (w *World) Step() {
+	// 1. Initialize nextCells fresh to zero values (clean slate for accumulator)
+	nextCells := make([][][]types.LedgerState, w.Width)
+	for i := range nextCells {
+		nextCells[i] = make([][]types.LedgerState, w.Height)
+		for j := range nextCells[i] {
+			nextCells[i][j] = make([]types.LedgerState, w.Depth)
+			for k := range nextCells[i][j] {
+				// Carry over scalar and non-mass fields (V0, V1, V2)
+				nextCells[i][j][k].Fields.Scalar = w.Cells[i][j][k].Fields.Scalar
+				for f := 0; f < 3; f++ {
+					nextCells[i][j][k].Fields.V[f] = w.Cells[i][j][k].Fields.V[f]
+				}
+			}
+		}
+	}
+
+	dx := [6]int{1, -1, 0, 0, 0, 0}
+	dy := [6]int{0, 0, 1, -1, 0, 0}
+	dz := [6]int{0, 0, 0, 0, 1, -1}
+	opposite := [6]int{1, 0, 3, 2, 5, 4}
+
+	// 2. Compute mass migrations
+	for x := 1; x < w.Width-1; x++ {
+		for y := 1; y < w.Height-1; y++ {
+			for z := 1; z < w.Depth-1; z++ {
+				curr := w.Cells[x][y][z]
+				mVal := curr.Fields.V[3]
+				aVal := curr.Fields.V[4]
+
+				if mVal <= 0 && aVal <= 0 {
+					continue
+				}
+
+				// Mass Lattice Drag: High concentrations resist moving [cite: 643]
+				dragFactor := 1.0 / (1.0 + 0.1*(mVal+aVal))
+
+				// Standard rate of mass wanting to diffuse out to each of the 6 directions
+				mOutPerDir := (mVal * 0.1) * dragFactor
+				aOutPerDir := (aVal * 0.1) * dragFactor
+
+				mRetained := mVal - (mOutPerDir * 6.0)
+				if mRetained < 0 {
+					mRetained = 0
+				}
+				aRetained := aVal - (aOutPerDir * 6.0)
+				if aRetained < 0 {
+					aRetained = 0
+				}
+
+				// Add retained baseline mass to self in the next frame
+				nextCells[x][y][z].Fields.V[3] += mRetained
+				nextCells[x][y][z].Fields.V[4] += aRetained
+
+				// Process outward directional steps
+				for i := 0; i < 6; i++ {
+					nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
+					neighbor := w.Cells[nx][ny][nz]
+					neighMatter := neighbor.Fields.V[3]
+					neighAntimatter := neighbor.Fields.V[4]
+
+					// Check if target direction hits an opposing domain boundary [cite: 768]
+					isMatterBlocked := mOutPerDir > 0 && neighAntimatter > 0
+					isAntimatterBlocked := aOutPerDir > 0 && neighMatter > 0
+
+					if isMatterBlocked {
+						// Repulsion mechanism: Recoil backwards based on repulsion strength config [cite: 562, 871]
+						recoilFactor := 0.02 * w.RepulsionStrength
+						if recoilFactor > 1.0 {
+							recoilFactor = 1.0
+						}
+
+						recoilAmt := mOutPerDir * recoilFactor
+						forwardAmt := mOutPerDir - recoilAmt
+
+						// Send forward portion to neighbor, push recoil portion backward
+						nextCells[nx][ny][nz].Fields.V[3] += forwardAmt
+
+						rx, ry, rz := x+dx[opposite[i]], y+dy[opposite[i]], z+dz[opposite[i]]
+						nextCells[rx][ry][rz].Fields.V[3] += recoilAmt
+					} else {
+						// Standard unobstructed step
+						nextCells[nx][ny][nz].Fields.V[3] += mOutPerDir
+					}
+
+					if isAntimatterBlocked {
+						recoilFactor := 0.02 * w.RepulsionStrength
+						if recoilFactor > 1.0 {
+							recoilFactor = 1.0
+						}
+
+						recoilAmt := aOutPerDir * recoilFactor
+						forwardAmt := aOutPerDir - recoilAmt
+
+						nextCells[nx][ny][nz].Fields.V[4] += forwardAmt
+
+						rx, ry, rz := x+dx[opposite[i]], y+dy[opposite[i]], z+dz[opposite[i]]
+						nextCells[rx][ry][rz].Fields.V[4] += recoilAmt
+					} else {
+						nextCells[nx][ny][nz].Fields.V[4] += aOutPerDir
+					}
+				}
+			}
+		}
+	}
+
+	// 3. Process In-Voxel Annihilation & Curvature Mapping Post-Migration [cite: 603]
+	for x := 1; x < w.Width-1; x++ {
+		for y := 1; y < w.Height-1; y++ {
+			for z := 1; z < w.Depth-1; z++ {
+				cell := &nextCells[x][y][z]
+
+				m := cell.Fields.V[3]
+				a := cell.Fields.V[4]
+
+				// Boundary clean annihilation rules [cite: 501]
+				if m > 0 && a > 0 {
+					annihilationAmt := math.Min(m, a) * 0.4 // Decay speed index
+					cell.Fields.V[3] -= annihilationAmt
+					cell.Fields.V[4] -= annihilationAmt
+				}
+
+				// Finalize baseline values
+				if cell.Fields.V[3] < 1e-5 {
+					cell.Fields.V[3] = 0
+				}
+				if cell.Fields.V[4] < 1e-5 {
+					cell.Fields.V[4] = 0
+				}
+
+				cell.Energy = cell.Fields.NetCurvature()[cite:455]
+				cell.Commit = true
+			}
+		}
+	}
+
+	w.Cells = nextCells
+}
+
+
+=== FILE: ./engine/wm.go ===
+package engine
+
+import (
+	"fmt"
+
+	"github.com/google/uuid"
+)
+
+type UniverseStore interface {
+	Create(id string, world *World) error
+	Get(id string) (*World, bool, error)
+	Update(id string, world *World) error
+	Delete(id string) error
+	Close() error
+}
+
+type WorldManager struct {
+	store UniverseStore
+}
+
+// NewWorldManager creates the manager with a pluggable universe store.
+func NewWorldManager(store UniverseStore) *WorldManager {
+	return &WorldManager{
+		store: store,
+	}
+}
+
+// CreateUniverse initializes a world, saves it, and returns the ID.
+func (m *WorldManager) CreateUniverse(w, h, d int) (string, error) {
+	id := uuid.New().String()
+	newWorld := NewWorld(w, h, d)
+
+	if err := m.store.Create(id, &newWorld); err != nil {
+		return "", fmt.Errorf("create universe %q: %w", id, err)
+	}
+
+	return id, nil
+}
+
+// GetUniverse retrieves a world by ID from the store.
+func (m *WorldManager) GetUniverse(id string) (*World, bool, error) {
+	return m.store.Get(id)
+}
+
+// UpdateUniverse persists changes to an existing universe.
+func (m *WorldManager) UpdateUniverse(id string, world *World) error {
+	if err := m.store.Update(id, world); err != nil {
+		return fmt.Errorf("update universe %q: %w", id, err)
+	}
+
+	return nil
+}
+
+// Stop shuts down the WorldManager store.
+func (m *WorldManager) Stop() {
+	if m == nil || m.store == nil {
+		return
+	}
+
+	_ = m.store.Close()
+}
+
+
+=== FILE: ./handlers/handlers.go ===
+package handlers
+
+import (
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/gojrs/para-nbody/engine"
+	"github.com/gojrs/para-nbody/types"
+)
+
+type Handler struct {
+	WorldManager *engine.WorldManager
+}
+
+func NewHandler(worldManager *engine.WorldManager) *Handler {
+	return &Handler{WorldManager: worldManager}
+}
+
+func (h *Handler) RegisterRoutes(router *gin.Engine) {
+	apiV1 := router.Group("/api/v1")
+	{
+		apiV1.POST("/pnbody/init", h.PNBodyIni)
+		apiV1.GET("/pnbody/:id", h.PNBodyByID)
+		apiV1.POST("/pnbody/:id/run", h.RunSteps)
+	}
+
+	// Support your legacy payload layout sent by hammer.go
+	router.POST("/api/pnbody/", h.HandleHammerRequest)
+}
+
+func (h *Handler) HandleHammerRequest(c *gin.Context) {
+	var cfg types.NBodyConfig
+	if err := c.ShouldBindJSON(&cfg); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	size := 40 // Optimized block size for dynamic voxel computation
+	universeID, _ := h.WorldManager.CreateUniverse(size, size, size)
+	world, _, _ := h.WorldManager.GetUniverse(universeID)
+
+	world.RepulsionStrength = cfg.UnlikeMassRepulsionStrength
+
+	// Populate basic matter/antimatter structural test groups
+	matterRecipe := types.Multivector{V: [5]float64{0, 0, 0, cfg.ParticleMass * 50.0, 0}}
+	antimatterRecipe := types.Multivector{V: [5]float64{0, 0, 0, 0, cfg.ParticleMass * 50.0}}
+
+	world.HydratePillar(size/3, size/2, size/2, matterRecipe)
+	world.HydratePillar((size*2)/3, size/2, size/2, antimatterRecipe)
+
+	for i := 0; i < cfg.Steps; i++ {
+		world.Step()
+	}
+	_ = h.WorldManager.UpdateUniverse(universeID, world)
+
+	// Evaluate structural metrics for the audit report
+	var totalSurvivors int64 = 0
+	var maxObservedMass float64 = 0.0
+	for x := 0; x < world.Width; x++ {
+		for y := 0; y < world.Height; y++ {
+			for z := 0; z < world.Depth; z++ {
+				m := world.Cells[x][y][z].Fields.Matter() + world.Cells[x][y][z].Fields.Antimatter()
+				if m > 0.1 {
+					totalSurvivors++
+					if m > maxObservedMass {
+						maxObservedMass = m
+					}
+				}
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id": time.Now().UnixNano() % 1000,
+		"result": types.NBodyResult{
+			FinalCount: totalSurvivors,
+			MaxMass:    maxObservedMass,
+		},
+	})
+}
+
+func (h *Handler) PNBodyIni(c *gin.Context) {
+	var req struct {
+		Width  int               `json:"width"`
+		Height int               `json:"height"`
+		Depth  int               `json:"depth"`
+		Recipe types.Multivector `json:"recipe"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	id, _ := h.WorldManager.CreateUniverse(req.Width, req.Height, req.Depth)
+	world, _, _ := h.WorldManager.GetUniverse(id)
+	world.HydratePillar(req.Width/2, req.Height/2, req.Depth/2, req.Recipe)
+	_ = h.WorldManager.UpdateUniverse(id, world)
+
+	c.JSON(http.StatusOK, gin.H{"universe_id": id, "message": "Laboratory active"})
+}
+
+func (h *Handler) PNBodyByID(c *gin.Context) {
+	id := c.Param("id")
+	world, ok, _ := h.WorldManager.GetUniverse(id)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Universe missing"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"world": world})
+}
+
+func (h *Handler) RunSteps(c *gin.Context) {
+	id := c.Param("id")
+	stepsStr := c.DefaultQuery("count", "1")
+	steps, err := strconv.Atoi(stepsStr)
+	if err != nil || steps <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid count parameter"})
+		return
+	}
+
+	world, exists, _ := h.WorldManager.GetUniverse(id)
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Universe missing"})
+		return
+	}
+
+	// Run calculations sequentially on the master structural object
+	for i := 0; i < steps; i++ {
+		world.Step()
+	}
+
+	// Safe thread block optimization for database flushing
+	clonedWorld := *world
+	clonedWorld.Cells = world.CloneCells()
+	err = h.WorldManager.UpdateUniverse(id, &clonedWorld)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"universe_id":     id,
+		"steps_completed": steps,
+		"status":          "Evolution Success",
+	})
+}
+
+
+=== FILE: ./store/store.go ===
+package storage
+
+
+=== FILE: ./store/sqlite.go ===
+package storage
+
+import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/gojrs/para-nbody/engine"
+	_ "github.com/mattn/go-sqlite3"
+)
+
+type SQLiteStore struct {
+	db *sql.DB
+}
+
+func NewSQLiteStore(path string) (*SQLiteStore, error) {
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		return nil, err
+	}
+
+	db.SetMaxOpenConns(1)
+
+	store := &SQLiteStore{
+		db: db,
+	}
+
+	if err := store.init(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+
+	return store, nil
+}
+
+func (s *SQLiteStore) init() error {
+	statements := []string{
+		`PRAGMA journal_mode = WAL;`,
+		`PRAGMA synchronous = NORMAL;`,
+		`PRAGMA busy_timeout = 5000;`,
+		`PRAGMA foreign_keys = ON;`,
+		`CREATE TABLE IF NOT EXISTS universes (
+			id TEXT PRIMARY KEY,
+			width INTEGER NOT NULL,
+			height INTEGER NOT NULL,
+			depth INTEGER NOT NULL,
+			current_step INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS chunk_0 (
+			universe_id TEXT NOT NULL,
+			step INTEGER NOT NULL,
+			payload BLOB NOT NULL,
+			created_at TEXT NOT NULL,
+			PRIMARY KEY (universe_id, step),
+			FOREIGN KEY (universe_id) REFERENCES universes(id) ON DELETE CASCADE
+		);`,
+	}
+
+	for _, statement := range statements {
+		if _, err := s.db.Exec(statement); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *SQLiteStore) Create(id string, world *engine.World) error {
+	if id == "" {
+		return fmt.Errorf("id is required")
+	}
+	if world == nil {
+		return fmt.Errorf("world is required")
+	}
+
+	payload, err := json.Marshal(world)
+	if err != nil {
+		return fmt.Errorf("marshal world: %w", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(
+		`INSERT INTO universes (id, width, height, depth, current_step, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, 0, ?, ?)`,
+		id,
+		world.Width,
+		world.Height,
+		world.Depth,
+		now,
+		now,
+	); err != nil {
+		return fmt.Errorf("insert universe: %w", err)
+	}
+
+	if _, err := tx.Exec(
+		`INSERT INTO chunk_0 (universe_id, step, payload, created_at)
+		 VALUES (?, 0, ?, ?)`,
+		id,
+		payload,
+		now,
+	); err != nil {
+		return fmt.Errorf("insert chunk_0: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) Get(id string) (*engine.World, bool, error) {
+	if id == "" {
+		return nil, false, fmt.Errorf("id is required")
+	}
+
+	var currentStep int64
+	err := s.db.QueryRow(
+		`SELECT current_step FROM universes WHERE id = ?`,
+		id,
+	).Scan(&currentStep)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("select universe: %w", err)
+	}
+
+	var payload []byte
+	err = s.db.QueryRow(
+		`SELECT payload FROM chunk_0 WHERE universe_id = ? AND step = ?`,
+		id,
+		currentStep,
+	).Scan(&payload)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("select chunk_0: %w", err)
+	}
+
+	var world engine.World
+	if err := json.Unmarshal(payload, &world); err != nil {
+		return nil, false, fmt.Errorf("unmarshal world: %w", err)
+	}
+
+	return &world, true, nil
+}
+
+func (s *SQLiteStore) Update(id string, world *engine.World) error {
+	if id == "" {
+		return fmt.Errorf("id is required")
+	}
+	if world == nil {
+		return fmt.Errorf("world is required")
+	}
+
+	payload, err := json.Marshal(world)
+	if err != nil {
+		return fmt.Errorf("marshal world: %w", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var currentStep int64
+	err = tx.QueryRow(
+		`SELECT current_step FROM universes WHERE id = ?`,
+		id,
+	).Scan(&currentStep)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("universe %q not found", id)
+	}
+	if err != nil {
+		return fmt.Errorf("select current step: %w", err)
+	}
+
+	nextStep := currentStep + 1
+
+	if _, err := tx.Exec(
+		`INSERT INTO chunk_0 (universe_id, step, payload, created_at)
+		 VALUES (?, ?, ?, ?)`,
+		id,
+		nextStep,
+		payload,
+		now,
+	); err != nil {
+		return fmt.Errorf("insert chunk_0 step: %w", err)
+	}
+
+	if _, err := tx.Exec(
+		`UPDATE universes
+		 SET width = ?, height = ?, depth = ?, current_step = ?, updated_at = ?
+		 WHERE id = ?`,
+		world.Width,
+		world.Height,
+		world.Depth,
+		nextStep,
+		now,
+		id,
+	); err != nil {
+		return fmt.Errorf("update universe: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) Delete(id string) error {
+	if id == "" {
+		return fmt.Errorf("id is required")
+	}
+
+	_, err := s.db.Exec(`DELETE FROM universes WHERE id = ?`, id)
+	return err
+}
+
+func (s *SQLiteStore) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+
+	return s.db.Close()
+}
+
+
+=== FILE: ./store/mem.go ===
+package storage
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/gojrs/para-nbody/engine"
+	"github.com/jellydator/ttlcache/v3"
+)
+
+type TTLStore struct {
+	cache *ttlcache.Cache[string, *engine.World]
+}
+
+func NewTTLStore(ttl time.Duration) *TTLStore {
+	cache := ttlcache.New[string, *engine.World](
+		ttlcache.WithTTL[string, *engine.World](ttl),
+	)
+
+	go cache.Start()
+
+	return &TTLStore{
+		cache: cache,
+	}
+}
+
+func (s *TTLStore) Create(id string, world *engine.World) error {
+	if id == "" {
+		return fmt.Errorf("id is required")
+	}
+	if world == nil {
+		return fmt.Errorf("world is required")
+	}
+
+	s.cache.Set(id, world, ttlcache.DefaultTTL)
+	return nil
+}
+
+func (s *TTLStore) Get(id string) (*engine.World, bool, error) {
+	if id == "" {
+		return nil, false, fmt.Errorf("id is required")
+	}
+
+	item := s.cache.Get(id)
+	if item == nil || item.Value() == nil {
+		return nil, false, nil
+	}
+
+	return item.Value(), true, nil
+}
+
+func (s *TTLStore) Update(id string, world *engine.World) error {
+	if id == "" {
+		return fmt.Errorf("id is required")
+	}
+	if world == nil {
+		return fmt.Errorf("world is required")
+	}
+
+	s.cache.Set(id, world, ttlcache.DefaultTTL)
+	return nil
+}
+
+func (s *TTLStore) Delete(id string) error {
+	if id == "" {
+		return fmt.Errorf("id is required")
+	}
+
+	s.cache.Delete(id)
+	return nil
+}
+
+func (s *TTLStore) Close() error {
+	if s == nil || s.cache == nil {
+		return nil
+	}
+
+	s.cache.Stop()
+	return nil
+}
+
+

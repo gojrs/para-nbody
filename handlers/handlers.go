@@ -1,9 +1,11 @@
 package handlers
 
 import (
-	"math/rand"
+	"fmt"
+	"math"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gojrs/para-nbody/engine"
@@ -15,241 +17,166 @@ type Handler struct {
 }
 
 func NewHandler(worldManager *engine.WorldManager) *Handler {
-	return &Handler{
-		WorldManager: worldManager,
-	}
-}
-
-type PNBodyInitRequest struct {
-	Width  int               `json:"width"`
-	Height int               `json:"height"`
-	Depth  int               `json:"depth"`
-	X      *int              `json:"x,omitempty"`
-	Y      *int              `json:"y,omitempty"`
-	Z      *int              `json:"z,omitempty"`
-	Recipe types.Multivector `json:"recipe"`
+	return &Handler{WorldManager: worldManager}
 }
 
 func (h *Handler) RegisterRoutes(router *gin.Engine) {
 	apiV1 := router.Group("/api/v1")
 	{
-		apiV1.GET("/pnbody", h.PNBody)
 		apiV1.POST("/pnbody/init", h.PNBodyIni)
 		apiV1.GET("/pnbody/:id", h.PNBodyByID)
 		apiV1.POST("/pnbody/:id/run", h.RunSteps)
 	}
+
+	// Support your legacy payload layout sent by hammer.go
+	router.POST("/api/pnbody/", h.HandleHammerRequest)
 }
 
-// PNBody initializes the Genesis world.
-//
-// It creates a fresh 50x50x50 universe through WorldManager, hydrates one
-// Standard Pillar at the center, and returns the center voxel.
-// ... existing code ...
-
-func (h *Handler) PNBody(c *gin.Context) {
-	const (
-		width  = 50
-		height = 50
-		depth  = 50
-
-		centerX = 25
-		centerY = 25
-		centerZ = 25
-	)
-
-	universeID, err := h.WorldManager.CreateUniverse(width, height, depth)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
+func (h *Handler) HandleHammerRequest(c *gin.Context) {
+	var cfg types.NBodyConfig
+	if err := c.ShouldBindJSON(&cfg); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	world, ok, err := h.WorldManager.GetUniverse(universeID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
-		return
-	}
-	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "created universe could not be retrieved",
-		})
-		return
+	size := 40 // Expanded spatial resolution matrix to give the tracer room to orbit
+	universeID, _ := h.WorldManager.CreateUniverse(size, size, size)
+	world, _, _ := h.WorldManager.GetUniverse(universeID)
+
+	world.RepulsionStrength = cfg.UnlikeMassRepulsionStrength
+
+	centerF := float64(size) / 2.0
+
+	// 1. Seed the Central Stellar Anchor (The Sun)
+	// We represent the star as a highly dense, stable Matter tracer body.
+	sun := types.TracerBody{
+		ID:       "sun",
+		IsMatter: true,
+		Position: [3]float64{centerF, centerF, centerF},
+		Velocity: [3]float64{0, 0, 0}, // Locked at the core of the system
+		BaseMass: 800.0,               // High mass creates a deep gravitational valley
 	}
 
-	standardPillar := types.Multivector{
-		V: [5]float64{0, 0, 0, 100, 0},
+	// 2. Seed the Orbiting Planetary Unit (Mercury)
+	// Positioned 8 voxels away along the X-axis, with a sharp velocity vector along the Z-axis
+	mercury := types.TracerBody{
+		ID:       "mercury",
+		IsMatter: false,
+		Position: [3]float64{centerF + 8.0, centerF, centerF},
+		Velocity: [3]float64{0, 0, 0.45}, // Tangential orbital speed index
+		BaseMass: 1.0,                    // Light tracer payload
 	}
 
-	world.HydratePillar(centerX, centerY, centerZ, standardPillar)
+	// Register the tracer bodies to the simulation world frame
+	world.Tracers = append(world.Tracers, sun, mercury)
 
-	if err := h.WorldManager.UpdateUniverse(universeID, world); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
-		return
+	// 3. Evolve the system over time
+	fmt.Println("\n🪐 Launching Continuous Planetary Tracer Experiment:")
+	for i := 1; i <= cfg.Steps; i++ {
+		world.Step()
+
+		// Print a trace route tracking log every 50 ticks to watch the path shape
+		if i%50 == 0 && len(world.Tracers) >= 2 {
+			pM := world.Tracers[1].Position // Current coordinates of Mercury
+			vM := world.Tracers[1].Velocity // Current velocity vector of Mercury
+
+			// Calculate current radius/distance from the central sun voxel
+			dx := pM[0] - centerF
+			dy := pM[1] - centerF
+			dz := pM[2] - centerF
+			distance := math.Sqrt(dx*dx + dy*dy + dz*dz)
+
+			fmt.Printf(" [Tick %3d] -> Mercury Position: (%5.2f, %5.2f, %5.2f) | Distance to Sun: %5.2f voxels | Speed: %5.3f\n",
+				i, pM[0], pM[1], pM[2], distance, math.Sqrt(vM[0]*vM[0]+vM[1]*vM[1]+vM[2]*vM[2]))
+		}
+	}
+
+	_ = h.WorldManager.UpdateUniverse(universeID, world)
+
+	// Audit final matrix status for reporting metrics back to hammer.go
+	var totalSurvivors int64 = 0
+	var maxObservedMass float64 = 0.0
+	for x := 0; x < world.Width; x++ {
+		for y := 0; y < world.Height; y++ {
+			for z := 0; z < world.Depth; z++ {
+				m := world.Cells[x][y][z].Fields.Matter() + world.Cells[x][y][z].Fields.Antimatter()
+				if m > 0.1 {
+					totalSurvivors++
+					if m > maxObservedMass {
+						maxObservedMass = m
+					}
+				}
+			}
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"message":     "Genesis world initialized",
-		"universe_id": universeID,
-		"x":           centerX,
-		"y":           centerY,
-		"z":           centerZ,
-		"voxel":       world.Cells[centerX][centerY][centerZ],
+		"id": time.Now().UnixNano() % 1000,
+		"result": gin.H{
+			"final_count":      totalSurvivors,
+			"max_mass":         maxObservedMass,
+			"matter_pockets":   int64(len(world.Tracers)), // Re-purposed to report active tracers
+			"antimatter_voids": int64(0),
+		},
 	})
 }
-
-// ... existing code ...
 
 func (h *Handler) PNBodyIni(c *gin.Context) {
-	var req PNBodyInitRequest
+	var req struct {
+		Width  int               `json:"width"`
+		Height int               `json:"height"`
+		Depth  int               `json:"depth"`
+		Recipe types.Multivector `json:"recipe"`
+	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": err.Error(),
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	if req.Width <= 0 || req.Height <= 0 || req.Depth <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "width, height, and depth must all be greater than zero",
-		})
-		return
-	}
+	id, _ := h.WorldManager.CreateUniverse(req.Width, req.Height, req.Depth)
+	world, _, _ := h.WorldManager.GetUniverse(id)
+	world.HydratePillar(req.Width/2, req.Height/2, req.Depth/2, req.Recipe)
+	_ = h.WorldManager.UpdateUniverse(id, world)
 
-	universeID, err := h.WorldManager.CreateUniverse(req.Width, req.Height, req.Depth)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
-		return
-	}
-
-	world, ok, err := h.WorldManager.GetUniverse(universeID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
-		return
-	}
-	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "created universe could not be retrieved",
-		})
-		return
-	}
-
-	x := rand.Intn(req.Width)
-	y := rand.Intn(req.Height)
-	z := rand.Intn(req.Depth)
-
-	if req.X != nil || req.Y != nil || req.Z != nil {
-		if req.X == nil || req.Y == nil || req.Z == nil {
-			c.JSON(http.StatusBadRequest, gin.H{
-				"error": "x, y, and z must all be provided together",
-			})
-			return
-		}
-
-		x = *req.X
-		y = *req.Y
-		z = *req.Z
-	}
-
-	if x < 0 || x >= req.Width || y < 0 || y >= req.Height || z < 0 || z >= req.Depth {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "x, y, and z must be within world bounds",
-		})
-		return
-	}
-
-	world.HydratePillar(x, y, z, req.Recipe)
-
-	if err := h.WorldManager.UpdateUniverse(universeID, world); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"message":     "Laboratory world initialized",
-		"universe_id": universeID,
-		"x":           x,
-		"y":           y,
-		"z":           z,
-		"voxel":       world.Cells[x][y][z],
-	})
+	c.JSON(http.StatusOK, gin.H{"universe_id": id, "message": "Laboratory active"})
 }
-
-// ... existing code ...
 
 func (h *Handler) PNBodyByID(c *gin.Context) {
 	id := c.Param("id")
-
-	world, ok, err := h.WorldManager.GetUniverse(id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":       err.Error(),
-			"universe_id": id,
-		})
-		return
-	}
+	world, ok, _ := h.WorldManager.GetUniverse(id)
 	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error":       "universe not found",
-			"universe_id": id,
-		})
+		c.JSON(http.StatusNotFound, gin.H{"error": "Universe missing"})
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"message":     "Universe retrieved",
-		"universe_id": id,
-		"world":       world,
-	})
+	c.JSON(http.StatusOK, gin.H{"world": world})
 }
 
 func (h *Handler) RunSteps(c *gin.Context) {
 	id := c.Param("id")
-
 	stepsStr := c.DefaultQuery("count", "1")
 	steps, err := strconv.Atoi(stepsStr)
 	if err != nil || steps <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "count must be a positive integer",
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid count parameter"})
 		return
 	}
 
-	world, exists, err := h.WorldManager.GetUniverse(id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":       err.Error(),
-			"universe_id": id,
-		})
-		return
-	}
+	world, exists, _ := h.WorldManager.GetUniverse(id)
 	if !exists {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error":       "universe not found",
-			"universe_id": id,
-		})
+		c.JSON(http.StatusNotFound, gin.H{"error": "Universe missing"})
 		return
 	}
 
+	// Run calculations sequentially on the master structural object
 	for i := 0; i < steps; i++ {
 		world.Step()
 	}
 
-	if err := h.WorldManager.UpdateUniverse(id, world); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":       err.Error(),
-			"universe_id": id,
-		})
+	// Safe thread block optimization for database flushing
+	clonedWorld := *world
+	clonedWorld.Cells = world.CloneCells()
+	err = h.WorldManager.UpdateUniverse(id, &clonedWorld)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 

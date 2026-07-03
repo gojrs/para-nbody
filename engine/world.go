@@ -1,116 +1,285 @@
 package engine
 
-import "github.com/gojrs/para-nbody/types"
+import (
+	"math"
+	"sync"
 
-// World represents the 3D GSIM ledger space.
-//
-// Cells are indexed as:
-//
-//	world.Cells[x][y][z]
-//
-// Each cell contains a LedgerState. The zero value of LedgerState is treated
-// as Vacuum.
+	"github.com/gojrs/para-nbody/types"
+)
+
 type World struct {
-	Width  int                     `json:"width"`
-	Height int                     `json:"height"`
-	Depth  int                     `json:"depth"`
-	Cells  [][][]types.LedgerState `json:"cells"`
+	Width             int                     `json:"width"`
+	Height            int                     `json:"height"`
+	Depth             int                     `json:"depth"`
+	RepulsionStrength float64                 `json:"repulsion_strength"`
+	Cells             [][][]types.LedgerState `json:"cells"`
+	Tracers           []types.TracerBody      `json:"tracers"` // Integrated continuous tracers
 }
 
-// NewWorld initializes a World with the requested dimensions.
-//
-// Every cell is populated with the zero value of LedgerState, representing
-// Vacuum.
 func NewWorld(width, height, depth int) World {
 	world := World{
-		Width:  width,
-		Height: height,
-		Depth:  depth,
-		Cells:  make([][][]types.LedgerState, width),
+		Width:             width,
+		Height:            height,
+		Depth:             depth,
+		RepulsionStrength: 1.0,
+		Cells:             make([][][]types.LedgerState, width),
+		Tracers:           make([]types.TracerBody, 0),
 	}
 
 	for x := 0; x < width; x++ {
 		world.Cells[x] = make([][]types.LedgerState, height)
-
 		for y := 0; y < height; y++ {
 			world.Cells[x][y] = make([]types.LedgerState, depth)
-
 			for z := 0; z < depth; z++ {
 				world.Cells[x][y][z] = types.LedgerState{}
 			}
 		}
 	}
-
 	return world
 }
 
-// HydratePillar injects a "Matter Recipe" into a specific coordinate.
-// In GSIM, this represents the 4-Simplex displacement (V3).
 func (w *World) HydratePillar(x, y, z int, recipe types.Multivector) {
-	// Boundary check to prevent a Spleef/Panic
 	if x < 0 || x >= w.Width || y < 0 || y >= w.Height || z < 0 || z >= w.Depth {
 		return
 	}
-
-	// Fetch current state
 	current := w.Cells[x][y][z]
-
-	// Add the recipe to the existing field
-	// This represents 'Hydrating' the vacuum with mass
 	current.Fields = current.Fields.Add(recipe)
-
-	// Update the energy balance (The Referee will audit this later)
-	current.Energy = current.Fields.Density()
-	current.Commit = false // Mark as 'Dirty' so the Ref knows to recalculate
-
-	// Write back to the grid
+	current.Energy = current.Fields.NetCurvature()
+	current.Commit = false
 	w.Cells[x][y][z] = current
 }
+
+func (w *World) CloneCells() [][][]types.LedgerState {
+	cloned := make([][][]types.LedgerState, w.Width)
+	for x := 0; x < w.Width; x++ {
+		cloned[x] = make([][]types.LedgerState, w.Height)
+		for y := 0; y < w.Height; y++ {
+			cloned[x][y] = make([]types.LedgerState, w.Depth)
+			copy(cloned[x][y], w.Cells[x][y])
+		}
+	}
+	return cloned
+}
+
 func (w *World) Step() {
-	// 1. Create the buffer for the next state
-	// We use the same dimensions as the current world
+	// NEW FIX: Clear out previous tick's raw tracer mass injections to prevent stack explosions
+	for x := 0; x < w.Width; x++ {
+		for y := 0; y < w.Height; y++ {
+			for z := 0; z < w.Depth; z++ {
+				w.Cells[x][y][z].Fields.V[3] = 0 // Reset temporary matter field line
+				w.Cells[x][y][z].Fields.V[4] = 0 // Reset temporary antimatter field line
+			}
+		}
+	}
+	// 1. Tracer-to-Grid Deposition Phase
+	// Bottled units inject their mass onto the field grid before background migrations compute
+	for _, tracer := range w.Tracers {
+		tx := int(math.Round(tracer.Position[0]))
+		ty := int(math.Round(tracer.Position[1]))
+		tz := int(math.Round(tracer.Position[2]))
+
+		if tx > 0 && tx < w.Width-1 && ty > 0 && ty < w.Height-1 && tz > 0 && tz < w.Depth-1 {
+			if tracer.IsMatter {
+				w.Cells[tx][ty][tz].Fields.V[3] += tracer.BaseMass
+			} else {
+				w.Cells[tx][ty][tz].Fields.V[4] += tracer.BaseMass
+			}
+		}
+	}
+
+	// 2. Initialize nextCells fresh to zero values
 	nextCells := make([][][]types.LedgerState, w.Width)
 	for i := range nextCells {
 		nextCells[i] = make([][]types.LedgerState, w.Height)
 		for j := range nextCells[i] {
 			nextCells[i][j] = make([]types.LedgerState, w.Depth)
-		}
-	}
-
-	// 2. Iterate through the "Inner Volumetric" space
-	// We skip the 1-voxel thick "skin" of the world to stay safe
-	for x := 1; x < w.Width-1; x++ {
-		for y := 1; y < w.Height-1; y++ {
-			for z := 1; z < w.Depth-1; z++ {
-				current := w.Cells[x][y][z]
-
-				// 3. Simple Diffusion: Average the 6 cardinal neighbors
-				// (Up, Down, Left, Right, Forward, Back)
-				var neighborSum types.Multivector
-				neighborSum = neighborSum.Add(w.Cells[x+1][y][z].Fields)
-				neighborSum = neighborSum.Add(w.Cells[x-1][y][z].Fields)
-				neighborSum = neighborSum.Add(w.Cells[x][y+1][z].Fields)
-				neighborSum = neighborSum.Add(w.Cells[x][y-1][z].Fields)
-				neighborSum = neighborSum.Add(w.Cells[x][y][z+1].Fields)
-				neighborSum = neighborSum.Add(w.Cells[x][y][z-1].Fields)
-
-				// 4. Calculate the 'Local Gradient'
-				// We average the neighbors (1/6) to find the 'Relaxed' state
-				avgField := neighborSum.Scale(1.0 / 6.0)
-
-				// Apply the update: 50% current state, 50% neighbor average
-				// This prevents the universe from exploding/jittering
-				current.Fields = current.Fields.Add(avgField).Scale(0.5)
-
-				// Sync the Ledger columns
-				current.Energy = current.Fields.Density()
-				current.Commit = true
-
-				nextCells[x][y][z] = current
+			for k := range nextCells[i][j] {
+				nextCells[i][j][k].Fields.Scalar = w.Cells[i][j][k].Fields.Scalar
+				for f := 0; f < 3; f++ {
+					nextCells[i][j][k].Fields.V[f] = w.Cells[i][j][k].Fields.V[f]
+				}
 			}
 		}
 	}
 
-	// 5. Swap the buffer: The 'Next' becomes the 'Now'
+	dx := [6]int{1, -1, 0, 0, 0, 0}
+	dy := [6]int{0, 0, 1, -1, 0, 0}
+	dz := [6]int{0, 0, 0, 0, 1, -1}
+
+	// 3. Dispatch Spatial Worker Pool
+	numWorkers := 4
+	xRangePerWorker := (w.Width - 2) / numWorkers
+	if xRangePerWorker < 1 {
+		xRangePerWorker = w.Width - 2
+		numWorkers = 1
+	}
+
+	var wg sync.WaitGroup
+
+	for workerID := 0; workerID < numWorkers; workerID++ {
+		startX := 1 + (workerID * xRangePerWorker)
+		endX := startX + xRangePerWorker
+		if workerID == numWorkers-1 {
+			endX = w.Width - 1
+		}
+
+		wg.Add(1)
+		go func(sX, eX int) {
+			defer wg.Done()
+
+			for x := sX; x < eX; x++ {
+				for y := 1; y < w.Height-1; y++ {
+					for z := 1; z < w.Depth-1; z++ {
+						curr := w.Cells[x][y][z]
+						mVal := curr.Fields.V[3]
+						aVal := curr.Fields.V[4]
+
+						if mVal <= 0 && aVal <= 0 {
+							continue
+						}
+
+						// Depth-Based Grid Tracking (Sinking Mass-Drag)
+						// Highly concentrated points sink deep, dramatically reducing field bleed
+						dragFactor := 1.0 / (1.0 + 0.15*(mVal+aVal))
+
+						var mWeights [6]float64
+						var aWeights [6]float64
+						var mTotalWeight float64 = 0
+						var aTotalWeight float64 = 0
+
+						for i := 0; i < 6; i++ {
+							nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
+							neigh := w.Cells[nx][ny][nz]
+
+							mWeights[i] = 1.0 + (neigh.Fields.V[3] * 0.5) - (neigh.Fields.V[4] * 0.2 * w.RepulsionStrength)
+							if mWeights[i] < 0.001 {
+								mWeights[i] = 0.001
+							}
+							mTotalWeight += mWeights[i]
+
+							aWeights[i] = 1.0 + (neigh.Fields.V[4] * 0.5) - (neigh.Fields.V[3] * 0.2 * w.RepulsionStrength)
+							if aWeights[i] < 0.001 {
+								aWeights[i] = 0.001
+							}
+							aTotalWeight += aWeights[i]
+						}
+
+						mMigrationRate := 0.25
+						if mVal > 5.0 {
+							mMigrationRate = 0.05
+						} // Enhanced surface tension cohesion lock
+						aMigrationRate := 0.25
+						if aVal > 5.0 {
+							aMigrationRate = 0.05
+						}
+
+						mOutTotal := mVal * mMigrationRate * dragFactor
+						aOutTotal := aVal * aMigrationRate * dragFactor
+
+						nextCells[x][y][z].Fields.V[3] += mVal - mOutTotal
+						nextCells[x][y][z].Fields.V[4] += aVal - aOutTotal
+
+						for i := 0; i < 6; i++ {
+							nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
+
+							if mOutTotal > 0 && mTotalWeight > 0 {
+								mMove := mOutTotal * (mWeights[i] / mTotalWeight)
+								nextCells[nx][ny][nz].Fields.V[3] += mMove
+							}
+
+							if aOutTotal > 0 && aTotalWeight > 0 {
+								aMove := aOutTotal * (aWeights[i] / aTotalWeight)
+								nextCells[nx][ny][nz].Fields.V[4] += aMove
+							}
+						}
+					}
+				}
+			}
+		}(startX, endX)
+	}
+
+	wg.Wait()
+
+	// 4. Boundary Sorting Phase
+	for x := 1; x < w.Width-1; x++ {
+		for y := 1; y < w.Height-1; y++ {
+			for z := 1; z < w.Depth-1; z++ {
+				cell := &nextCells[x][y][z]
+
+				m := cell.Fields.V[3]
+				a := cell.Fields.V[4]
+
+				if m > 0 && a > 0 {
+					annihilationAmt := math.Min(m, a) * 0.5
+					cell.Fields.V[3] -= annihilationAmt
+					cell.Fields.V[4] -= annihilationAmt
+				}
+
+				if cell.Fields.V[3] < 1e-4 {
+					cell.Fields.V[3] = 0
+				}
+				if cell.Fields.V[4] < 1e-4 {
+					cell.Fields.V[4] = 0
+				}
+
+				cell.Energy = cell.Fields.NetCurvature()
+				cell.Commit = true
+			}
+		}
+	}
+
 	w.Cells = nextCells
+
+	// 5. Grid-to-Tracer Projection Phase (With Dynamic Asymmetric Scaling)
+	for idx := range w.Tracers {
+		tracer := &w.Tracers[idx]
+		tx := int(math.Round(tracer.Position[0]))
+		ty := int(math.Round(tracer.Position[1]))
+		tz := int(math.Round(tracer.Position[2]))
+
+		bounceDampening := -0.9
+		if tx <= 1 || tx >= w.Width-2 {
+			tracer.Velocity[0] *= bounceDampening
+			tracer.Position[0] += tracer.Velocity[0]
+		}
+		if ty <= 1 || ty >= w.Height-2 {
+			tracer.Velocity[1] *= bounceDampening
+			tracer.Position[1] += tracer.Velocity[1]
+		}
+		if tz <= 1 || tz >= w.Depth-2 {
+			tracer.Velocity[2] *= bounceDampening
+			tracer.Position[2] += tracer.Velocity[2]
+		}
+
+		tx = int(math.Round(tracer.Position[0]))
+		ty = int(math.Round(tracer.Position[1]))
+		tz = int(math.Round(tracer.Position[2]))
+
+		if tx <= 0 || tx >= w.Width-1 || ty <= 0 || ty >= w.Height-1 || tz <= 0 || tz >= w.Depth-1 {
+			continue
+		}
+
+		// Read base ledger gradients
+		gradX := w.Cells[tx+1][ty][tz].Energy - w.Cells[tx-1][ty][tz].Energy
+		gradY := w.Cells[tx][ty+1][tz].Energy - w.Cells[tx][ty-1][tz].Energy
+		gradZ := w.Cells[tx][ty][tz+1].Energy - w.Cells[tx][ty][tz-1].Energy
+
+		// Apply the asymmetrical charge conjugation scaling factors
+		chargeSign := 1.0
+
+		if !tracer.IsMatter {
+			// If an antimatter body is interacting with a matter-dominated grid,
+			// scale the repulsive acceleration by your custom configuration factor!
+			chargeSign = -1.0 * w.RepulsionStrength
+		}
+
+		gravitySensitivity := 0.02
+		tracer.Velocity[0] += gradX * gravitySensitivity * chargeSign
+		tracer.Velocity[1] += gradY * gravitySensitivity * chargeSign
+		tracer.Velocity[2] += gradZ * gravitySensitivity * chargeSign
+
+		tracer.Position[0] += tracer.Velocity[0]
+		tracer.Position[1] += tracer.Velocity[1]
+		tracer.Position[2] += tracer.Velocity[2]
+	}
 }
