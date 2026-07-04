@@ -36,6 +36,9 @@ run-ttl: build
 run-sqlite: build
 	PNBODY_STORE=sqlite PNBODY_DB=$(DB_PATH) $(BIN)
 
+build-linux:
+	GOOS=linux GOARCH=amd64 go build -o $(BIN)-linux-amd64 $(CMD_DIR)
+
 test:
 	go test ./...
 
