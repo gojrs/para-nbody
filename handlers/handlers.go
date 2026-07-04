@@ -26,6 +26,7 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 		apiV1.POST("/pnbody/init", h.PNBodyIni)
 		apiV1.GET("/pnbody/:id", h.PNBodyByID)
 		apiV1.POST("/pnbody/:id/run", h.RunSteps)
+		apiV1.POST("/pnbody/wave-sweep", h.HandleWaveSweepRequest)
 	}
 
 	// Support your legacy payload layout sent by hammer.go
@@ -189,5 +190,72 @@ func (h *Handler) RunSteps(c *gin.Context) {
 		"universe_id":     id,
 		"steps_completed": steps,
 		"status":          "Evolution Success",
+	})
+}
+
+func (h *Handler) HandleWaveSweepRequest(c *gin.Context) {
+	var cfg types.NBodyConfig
+	if err := c.ShouldBindJSON(&cfg); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	size := cfg.GridSize
+	if size == 0 {
+		size = 40
+	}
+
+	universeID, _ := h.WorldManager.CreateUniverse(size, size, size)
+	world, _, _ := h.WorldManager.GetUniverse(universeID)
+
+	world.RepulsionStrength = cfg.UnlikeMassRepulsionStrength
+	world.GravitySensitivity = cfg.GravitySensitivity
+	world.BaseMigrationRate = cfg.BaseMigrationRate
+	world.StickyClumpRate = cfg.StickyClumpRate
+
+	// SEED THE BACKGROUND VACUUM WAVES
+	// We fill the 3D domain with intersecting sine wave ripples
+	// to see if they naturally bottle or trigger Reverse Spleef
+	for x := 1; x < world.Width-1; x++ {
+		for y := 1; y < world.Height-1; y++ {
+			for z := 1; z < world.Depth-1; z++ {
+				// Generate spatial phase and amplitude gradients
+				world.Cells[x][y][z].Fields.Amplitude = 3.5 * math.Sin(float64(x)*0.5)
+				world.Cells[x][y][z].Fields.Phase = float64(y+z) * 0.2
+			}
+		}
+	}
+
+	// Evolve the wave framework across your spatial workers
+	for i := 0; i < cfg.Steps; i++ {
+		world.Step()
+	}
+
+	_ = h.WorldManager.UpdateUniverse(universeID, world)
+
+	// Audit final matrix status
+	var totalActive int64 = 0
+	var maxObservedMass float64 = 0.0
+	for x := 0; x < world.Width; x++ {
+		for y := 0; y < world.Height; y++ {
+			for z := 0; z < world.Depth; z++ {
+				m := world.Cells[x][y][z].Fields.Matter() + world.Cells[x][y][z].Fields.Antimatter()
+				if m > 0.1 {
+					totalActive++
+					if m > maxObservedMass {
+						maxObservedMass = m
+					}
+				}
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id": time.Now().UnixNano() % 1000,
+		"result": gin.H{
+			"final_count":    totalActive,
+			"max_mass":       maxObservedMass,
+			"matter_pockets": int64(len(world.Tracers)),
+		},
 	})
 }

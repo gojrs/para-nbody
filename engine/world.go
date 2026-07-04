@@ -67,17 +67,29 @@ func (w *World) CloneCells() [][][]types.LedgerState {
 }
 
 func (w *World) Step() {
-	// NEW FIX: Clear out previous tick's raw tracer mass injections to prevent stack explosions
-	for x := 0; x < w.Width; x++ {
-		for y := 0; y < w.Height; y++ {
-			for z := 0; z < w.Depth; z++ {
-				w.Cells[x][y][z].Fields.V[3] = 0 // Reset temporary matter field line
-				w.Cells[x][y][z].Fields.V[4] = 0 // Reset temporary antimatter field line
+	// 1. Only subtract mass from cells occupied by actual tracers
+	// This preserves dynamically generated wave condensation across the rest of the vacuum!
+	for _, tracer := range w.Tracers {
+		tx := int(math.Round(tracer.Position[0]))
+		ty := int(math.Round(tracer.Position[1]))
+		tz := int(math.Round(tracer.Position[2]))
+
+		if tx > 0 && tx < w.Width-1 && ty > 0 && ty < w.Height-1 && tz > 0 && tz < w.Depth-1 {
+			if tracer.IsMatter {
+				w.Cells[tx][ty][tz].Fields.V[3] -= tracer.BaseMass
+				if w.Cells[tx][ty][tz].Fields.V[3] < 0 {
+					w.Cells[tx][ty][tz].Fields.V[3] = 0
+				}
+			} else {
+				w.Cells[tx][ty][tz].Fields.V[4] -= tracer.BaseMass
+				if w.Cells[tx][ty][tz].Fields.V[4] < 0 {
+					w.Cells[tx][ty][tz].Fields.V[4] = 0
+				}
 			}
 		}
 	}
-	// 1. Tracer-to-Grid Deposition Phase
-	// Bottled units inject their mass onto the field grid before background migrations compute
+
+	// 2. Tracer-to-Grid Deposition Phase
 	for _, tracer := range w.Tracers {
 		tx := int(math.Round(tracer.Position[0]))
 		ty := int(math.Round(tracer.Position[1]))
@@ -92,26 +104,14 @@ func (w *World) Step() {
 		}
 	}
 
-	// 2. Initialize nextCells fresh to zero values
-	nextCells := make([][][]types.LedgerState, w.Width)
-	for i := range nextCells {
-		nextCells[i] = make([][]types.LedgerState, w.Height)
-		for j := range nextCells[i] {
-			nextCells[i][j] = make([]types.LedgerState, w.Depth)
-			for k := range nextCells[i][j] {
-				nextCells[i][j][k].Fields.Scalar = w.Cells[i][j][k].Fields.Scalar
-				for f := 0; f < 3; f++ {
-					nextCells[i][j][k].Fields.V[f] = w.Cells[i][j][k].Fields.V[f]
-				}
-			}
-		}
-	}
+	// 3. Initialize transactional nextCells buffer
+	nextCells := w.CloneCells()
 
 	dx := [6]int{1, -1, 0, 0, 0, 0}
 	dy := [6]int{0, 0, 1, -1, 0, 0}
 	dz := [6]int{0, 0, 0, 0, 1, -1}
 
-	// 3. Dispatch Spatial Worker Pool
+	// 4. Dispatch Concurrent Spatial Workers
 	numWorkers := 4
 	xRangePerWorker := (w.Width - 2) / numWorkers
 	if xRangePerWorker < 1 {
@@ -120,6 +120,10 @@ func (w *World) Step() {
 	}
 
 	var wg sync.WaitGroup
+
+	// ADJUSTED THRESHOLDS: Calibrated to match the mathematical scale of your seeded sine waves
+	const ConstructiveThreshold = 6.5
+	const DestructiveThreshold = -2.0
 
 	for workerID := 0; workerID < numWorkers; workerID++ {
 		startX := 1 + (workerID * xRangePerWorker)
@@ -135,28 +139,91 @@ func (w *World) Step() {
 			for x := sX; x < eX; x++ {
 				for y := 1; y < w.Height-1; y++ {
 					for z := 1; z < w.Depth-1; z++ {
-						curr := w.Cells[x][y][z]
-						mVal := curr.Fields.V[3]
-						aVal := curr.Fields.V[4]
 
-						if mVal <= 0 && aVal <= 0 {
-							continue
-						}
-
-						// Depth-Based Grid Tracking (Sinking Mass-Drag)
-						// Highly concentrated points sink deep, dramatically reducing field bleed
-						dragFactor := 1.0 / (1.0 + 0.15*(mVal+aVal))
-
-						var mWeights [6]float64
-						var aWeights [6]float64
-						var mTotalWeight float64 = 0
-						var aTotalWeight float64 = 0
+						// --- PASS 1: WAVE INTERFERENCE GEOMETRY ---
+						cell := w.Cells[x][y][z]
+						var netInterference float64 = 0.0
 
 						for i := 0; i < 6; i++ {
 							nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
 							neigh := w.Cells[nx][ny][nz]
 
-							mWeights[i] = 1.0 + (neigh.Fields.V[3] * 0.5) - (neigh.Fields.V[4] * 0.2 * w.RepulsionStrength)
+							phaseDiff := cell.Fields.Phase - neigh.Fields.Phase
+							interference := cell.Fields.Amplitude * neigh.Fields.Amplitude * math.Cos(phaseDiff)
+							netInterference += interference
+						}
+
+						if netInterference >= ConstructiveThreshold {
+							// Constructive Max: Packets stack and condense into persistent localized matter (+W, Red)
+							nextCells[x][y][z].Fields.V[3] += netInterference * 0.15
+							nextCells[x][y][z].Fields.Amplitude *= 0.2 // Flatten the loose wave packet upon bottling
+						} else if netInterference <= DestructiveThreshold {
+							// Destructive Max: Reverse Spleef injects baseline units to stabilize the ledger
+							nextCells[x][y][z].Fields.V[3] += 0.5
+							nextCells[x][y][z].Fields.Phase *= 0.5
+						}
+
+						// --- PASS 2: GEOMETRIC SURFACE DISTANCE IMPEDANCE (NATURE'S DRAG) ---
+						mVal := nextCells[x][y][z].Fields.V[3]
+						aVal := nextCells[x][y][z].Fields.V[4]
+
+						if mVal <= 0 && aVal <= 0 {
+							continue
+						}
+
+						// Calculate absolute displacement from Surface 0 (W = 0)
+						netCurvature := mVal - aVal
+						distanceFromSurface := math.Abs(netCurvature)
+
+						// Lattice Impedance Factor: The deeper from the surface, the higher the viscous resistance
+						const SpatialRigidityConstant = 0.15
+						dragFactor := 1.0 / (1.0 + (distanceFromSurface * SpatialRigidityConstant))
+
+						// --- NEW: LOCAL NEIGHBORHOOD GRAVITY PULL (Sample 2 voxels out in an envelope) ---
+						var pullX, pullY, pullZ float64
+						for dxLocal := -2; dxLocal <= 2; dxLocal++ {
+							for dyLocal := -2; dyLocal <= 2; dyLocal++ {
+								for dzLocal := -2; dzLocal <= 2; dzLocal++ {
+									nx, ny, nz := x+dxLocal, y+dyLocal, z+dzLocal
+
+									// Boundary safety optimization
+									if nx >= 0 && nx < w.Width && ny >= 0 && ny < w.Height && nz >= 0 && nz < w.Depth {
+										neighborMass := w.Cells[nx][ny][nz].Fields.V[3]
+										if neighborMass > 0 {
+											distSq := float64(dxLocal*dxLocal + dyLocal*dyLocal + dzLocal*dzLocal)
+											if distSq > 0 {
+												// 1/r^2 inverse square force scaling
+												force := neighborMass / distSq
+												pullX += (float64(dxLocal) / math.Sqrt(distSq)) * force
+												pullY += (float64(dyLocal) / math.Sqrt(distSq)) * force
+												pullZ += (float64(dzLocal) / math.Sqrt(distSq)) * force
+											}
+										}
+									}
+								}
+							}
+						}
+
+						var mWeights, aWeights [6]float64
+						var mTotalWeight, aTotalWeight float64
+
+						for i := 0; i < 6; i++ {
+							nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
+							neigh := w.Cells[nx][ny][nz]
+
+							// Factor local directional gravity pulling into the standard migration weights
+							localPullFactor := 0.0
+							if dx[i] != 0 {
+								localPullFactor = pullX * float64(dx[i])
+							}
+							if dy[i] != 0 {
+								localPullFactor = pullY * float64(dy[i])
+							}
+							if dz[i] != 0 {
+								localPullFactor = pullZ * float64(dz[i])
+							}
+
+							mWeights[i] = 1.0 + (neigh.Fields.V[3] * 0.5) - (neigh.Fields.V[4] * 0.2 * w.RepulsionStrength) + (localPullFactor * 0.1)
 							if mWeights[i] < 0.001 {
 								mWeights[i] = 0.001
 							}
@@ -173,29 +240,25 @@ func (w *World) Step() {
 						if mVal > 5.0 {
 							mMigrationRate = w.StickyClumpRate
 						}
-
 						aMigrationRate := w.BaseMigrationRate
 						if aVal > 5.0 {
 							aMigrationRate = w.StickyClumpRate
 						}
 
+						// Apply your custom manifold-distance drag modifier to the fluid transfer execution
 						mOutTotal := mVal * mMigrationRate * dragFactor
 						aOutTotal := aVal * aMigrationRate * dragFactor
 
-						nextCells[x][y][z].Fields.V[3] += mVal - mOutTotal
-						nextCells[x][y][z].Fields.V[4] += aVal - aOutTotal
+						nextCells[x][y][z].Fields.V[3] -= mOutTotal
+						nextCells[x][y][z].Fields.V[4] -= aOutTotal
 
 						for i := 0; i < 6; i++ {
 							nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
-
 							if mOutTotal > 0 && mTotalWeight > 0 {
-								mMove := mOutTotal * (mWeights[i] / mTotalWeight)
-								nextCells[nx][ny][nz].Fields.V[3] += mMove
+								nextCells[nx][ny][nz].Fields.V[3] += mOutTotal * (mWeights[i] / mTotalWeight)
 							}
-
 							if aOutTotal > 0 && aTotalWeight > 0 {
-								aMove := aOutTotal * (aWeights[i] / aTotalWeight)
-								nextCells[nx][ny][nz].Fields.V[4] += aMove
+								nextCells[nx][ny][nz].Fields.V[4] += aOutTotal * (aWeights[i] / aTotalWeight)
 							}
 						}
 					}
@@ -206,12 +269,11 @@ func (w *World) Step() {
 
 	wg.Wait()
 
-	// 4. Boundary Sorting Phase
+	// 5. Boundary Sorting Phase
 	for x := 1; x < w.Width-1; x++ {
 		for y := 1; y < w.Height-1; y++ {
 			for z := 1; z < w.Depth-1; z++ {
 				cell := &nextCells[x][y][z]
-
 				m := cell.Fields.V[3]
 				a := cell.Fields.V[4]
 
@@ -236,7 +298,7 @@ func (w *World) Step() {
 
 	w.Cells = nextCells
 
-	// 5. Grid-to-Tracer Projection Phase (With Dynamic Asymmetric Scaling)
+	// 6. Grid-to-Tracer Projection Phase
 	for idx := range w.Tracers {
 		tracer := &w.Tracers[idx]
 		tx := int(math.Round(tracer.Position[0]))
@@ -265,21 +327,15 @@ func (w *World) Step() {
 			continue
 		}
 
-		// Read base ledger gradients
 		gradX := w.Cells[tx+1][ty][tz].Energy - w.Cells[tx-1][ty][tz].Energy
 		gradY := w.Cells[tx][ty+1][tz].Energy - w.Cells[tx][ty-1][tz].Energy
 		gradZ := w.Cells[tx][ty][tz+1].Energy - w.Cells[tx][ty][tz-1].Energy
 
-		// Apply the asymmetrical charge conjugation scaling factors
 		chargeSign := 1.0
-
 		if !tracer.IsMatter {
-			// If an antimatter body is interacting with a matter-dominated grid,
-			// scale the repulsive acceleration by your custom configuration factor!
 			chargeSign = -1.0 * w.RepulsionStrength
 		}
 
-		//gravitySensitivity := 0.02
 		tracer.Velocity[0] += gradX * w.GravitySensitivity * chargeSign
 		tracer.Velocity[1] += gradY * w.GravitySensitivity * chargeSign
 		tracer.Velocity[2] += gradZ * w.GravitySensitivity * chargeSign
@@ -287,5 +343,52 @@ func (w *World) Step() {
 		tracer.Position[0] += tracer.Velocity[0]
 		tracer.Position[1] += tracer.Velocity[1]
 		tracer.Position[2] += tracer.Velocity[2]
+	}
+}
+
+const (
+	ConstructiveThreshold = 15.0 // Amplitude spike required to "bottle" a particle
+	DestructiveThreshold  = -5.0 // Cancellation depth required to trigger "Reverse Spleef" injection
+)
+
+func (w *World) ProcessWaveMechanics() {
+	dx := [6]int{1, -1, 0, 0, 0, 0}
+	dy := [6]int{0, 0, 1, -1, 0, 0}
+	dz := [6]int{0, 0, 0, 0, 1, -1}
+
+	// We can process this within your parallelized worker segments safely
+	for x := 1; x < w.Width-1; x++ {
+		for y := 1; y < w.Height-1; y++ {
+			for z := 1; z < w.Depth-1; z++ {
+				cell := &w.Cells[x][y][z]
+
+				var netInterference float64 = 0.0
+
+				// Sample all 6 spatial directions to calculate interference patterns
+				for i := 0; i < 6; i++ {
+					nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
+					neighbor := w.Cells[nx][ny][nz]
+
+					// Standard wave interference equation: A1 * A2 * cos(phase_difference)
+					phaseDiff := cell.Fields.Phase - neighbor.Fields.Phase
+					interference := cell.Fields.Amplitude * neighbor.Fields.Amplitude * math.Cos(phaseDiff)
+					netInterference += interference
+				}
+
+				// Execute your structural state updates based on your Wave Rules:
+				if netInterference >= ConstructiveThreshold {
+					// 1. Constructive Max: Waves stack and condense into a localized "bottled" unit!
+					// We transfer loose grid energy into a locked mass channel
+					cell.Fields.V[3] += netInterference * 0.1
+					cell.Fields.Amplitude = 0 // The wave collapses/flattens into the mass node
+
+				} else if netInterference <= DestructiveThreshold {
+					// 2. Destructive Max: Waves cancel! Reverse Spleef mechanism activates
+					// Space injects a fresh baseline field unit to restore ledger balance
+					cell.Fields.V[3] += 1.0 // Injection unit padding
+					cell.Fields.Phase = 0   // Reset phase structure locally
+				}
+			}
+		}
 	}
 }

@@ -9,6 +9,9 @@ type LedgerState struct {
 type Multivector struct {
 	Scalar float64    `json:"scalar"`
 	V      [5]float64 `json:"v"` // [0]:Spin, [1]:Electric, [2]:Magnetic, [3]:Matter (+W), [4]:Antimatter (-W)
+	// --- NEW WAVE GEOMETRY CHANNELS ---
+	Amplitude float64 `json:"amplitude"` // Wave peak height
+	Phase     float64 `json:"phase"`     // Current phase angle in radians (0 to 2*Pi)
 }
 
 func (m Multivector) Add(other Multivector) Multivector {
