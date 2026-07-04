@@ -39,35 +39,40 @@ func (h *Handler) HandleHammerRequest(c *gin.Context) {
 		return
 	}
 
-	size := 40 // Expanded spatial resolution matrix to give the tracer room to orbit
+	// Dynamic sizing based on automation needs (fallback to 40 if zero)
+	size := cfg.GridSize
+	if size == 0 {
+		size = 40
+	}
+
 	universeID, _ := h.WorldManager.CreateUniverse(size, size, size)
 	world, _, _ := h.WorldManager.GetUniverse(universeID)
 
+	// Bind dynamic cosmic levers from the API request
 	world.RepulsionStrength = cfg.UnlikeMassRepulsionStrength
+	world.GravitySensitivity = cfg.GravitySensitivity
+	world.BaseMigrationRate = cfg.BaseMigrationRate
+	world.StickyClumpRate = cfg.StickyClumpRate
 
 	centerF := float64(size) / 2.0
 
-	// 1. Seed the Central Stellar Anchor (The Sun)
-	// We represent the star as a highly dense, stable Matter tracer body.
+	// Dynamic Tracer Seeding
 	sun := types.TracerBody{
 		ID:       "sun",
 		IsMatter: true,
 		Position: [3]float64{centerF, centerF, centerF},
-		Velocity: [3]float64{0, 0, 0}, // Locked at the core of the system
-		BaseMass: 800.0,               // High mass creates a deep gravitational valley
+		Velocity: [3]float64{0, 0, 0},
+		BaseMass: cfg.SunMass,
 	}
 
-	// 2. Seed the Orbiting Planetary Unit (Mercury)
-	// Positioned 8 voxels away along the X-axis, with a sharp velocity vector along the Z-axis
 	mercury := types.TracerBody{
 		ID:       "mercury",
-		IsMatter: false,
+		IsMatter: cfg.MercuryIsMatter,
 		Position: [3]float64{centerF + 8.0, centerF, centerF},
-		Velocity: [3]float64{0, 0, 0.45}, // Tangential orbital speed index
-		BaseMass: 1.0,                    // Light tracer payload
+		Velocity: [3]float64{0, 0, cfg.MercuryVelocityZ},
+		BaseMass: cfg.MercuryMass,
 	}
 
-	// Register the tracer bodies to the simulation world frame
 	world.Tracers = append(world.Tracers, sun, mercury)
 
 	// 3. Evolve the system over time

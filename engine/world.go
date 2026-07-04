@@ -13,7 +13,12 @@ type World struct {
 	Depth             int                     `json:"depth"`
 	RepulsionStrength float64                 `json:"repulsion_strength"`
 	Cells             [][][]types.LedgerState `json:"cells"`
-	Tracers           []types.TracerBody      `json:"tracers"` // Integrated continuous tracers
+	Tracers           []types.TracerBody      `json:"tracers"`
+
+	// --- AUTOMATION RUNTIME FIELDS ---
+	GravitySensitivity float64 `json:"gravity_sensitivity"`
+	BaseMigrationRate  float64 `json:"base_migration_rate"`
+	StickyClumpRate    float64 `json:"sticky_clump_rate"`
 }
 
 func NewWorld(width, height, depth int) World {
@@ -164,13 +169,14 @@ func (w *World) Step() {
 							aTotalWeight += aWeights[i]
 						}
 
-						mMigrationRate := 0.25
+						mMigrationRate := w.BaseMigrationRate
 						if mVal > 5.0 {
-							mMigrationRate = 0.05
-						} // Enhanced surface tension cohesion lock
-						aMigrationRate := 0.25
+							mMigrationRate = w.StickyClumpRate
+						}
+
+						aMigrationRate := w.BaseMigrationRate
 						if aVal > 5.0 {
-							aMigrationRate = 0.05
+							aMigrationRate = w.StickyClumpRate
 						}
 
 						mOutTotal := mVal * mMigrationRate * dragFactor
@@ -273,10 +279,10 @@ func (w *World) Step() {
 			chargeSign = -1.0 * w.RepulsionStrength
 		}
 
-		gravitySensitivity := 0.02
-		tracer.Velocity[0] += gradX * gravitySensitivity * chargeSign
-		tracer.Velocity[1] += gradY * gravitySensitivity * chargeSign
-		tracer.Velocity[2] += gradZ * gravitySensitivity * chargeSign
+		//gravitySensitivity := 0.02
+		tracer.Velocity[0] += gradX * w.GravitySensitivity * chargeSign
+		tracer.Velocity[1] += gradY * w.GravitySensitivity * chargeSign
+		tracer.Velocity[2] += gradZ * w.GravitySensitivity * chargeSign
 
 		tracer.Position[0] += tracer.Velocity[0]
 		tracer.Position[1] += tracer.Velocity[1]
