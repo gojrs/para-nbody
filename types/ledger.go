@@ -112,6 +112,9 @@ func NewParticleCookbook() *ParticleCookbook {
 		Decoders: []HumanLabel{
 			NewProtonClass(),
 			NewElectronClass(),
+			UpQuarkClass{},   // 🌟 Registered from fundamental_recipes.go
+			DownQuarkClass{}, // 🌟 Registered from fundamental_recipes.go
+			NeutrinoClass{},  // 🌟 Registered from fundamental_recipes.go
 		},
 	}
 }
@@ -144,14 +147,16 @@ type NBodyConfig struct {
 	UnlikeMassRepulsionStrength float64 `json:"unlike_mass_repulsion_strength"`
 
 	// --- NEW COSMIC AUTOMATION PARAMETERS ---
-	GridSize           int     `json:"grid_size"`           // Dynamic spatial resolution (e.g., 30, 40, 50)
-	SunMass            float64 `json:"sun_mass"`            // Central anchor mass allocation
-	MercuryMass        float64 `json:"mercury_mass"`        // Tracer mass allocation
-	MercuryVelocityZ   float64 `json:"mercury_velocity_z"`  // Tangential speed kick
-	MercuryIsMatter    bool    `json:"mercury_is_matter"`   // Structural field sign flag (True/False)
-	GravitySensitivity float64 `json:"gravity_sensitivity"` // Weak force constant (The G-scaling lever)
-	BaseMigrationRate  float64 `json:"base_migration_rate"` // Fluid bleed rate (Normal vacuum diffusion)
-	StickyClumpRate    float64 `json:"sticky_clump_rate"`   // Cohesive surface tension rate for dense knots
+	GridSize            int     `json:"grid_size"`             // Dynamic spatial resolution (e.g., 30, 40, 50)
+	SunMass             float64 `json:"sun_mass"`              // Central anchor mass allocation
+	MercuryMass         float64 `json:"mercury_mass"`          // Tracer mass allocation
+	MercuryVelocityZ    float64 `json:"mercury_velocity_z"`    // Tangential speed kick
+	MercuryIsMatter     bool    `json:"mercury_is_matter"`     // Structural field sign flag (True/False)
+	GravitySensitivity  float64 `json:"gravity_sensitivity"`   // Weak force constant (The G-scaling lever)
+	BaseMigrationRate   float64 `json:"base_migration_rate"`   // Fluid bleed rate (Normal vacuum diffusion)
+	StickyClumpRate     float64 `json:"sticky_clump_rate"`     // Cohesive surface tension rate for dense knots
+	PhaseRelaxationRate float64 `json:"phase_relaxation_rate"` // 🌟 Ensure this is here
+	TwistFollowRate     float64 `json:"twist_follow_rate"`
 }
 
 type NBodyResult struct {

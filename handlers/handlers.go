@@ -27,6 +27,7 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 		apiV1.GET("/pnbody/:id", h.PNBodyByID)
 		apiV1.POST("/pnbody/:id/run", h.RunSteps)
 		apiV1.POST("/pnbody/wave-sweep", h.HandleWaveSweepRequest)
+		apiV1.GET("/pnbody/:id/inventory", h.GetUniverseInventory)
 	}
 
 	// Support your legacy payload layout sent by hammer.go
@@ -213,27 +214,36 @@ func (h *Handler) HandleWaveSweepRequest(c *gin.Context) {
 	world.BaseMigrationRate = cfg.BaseMigrationRate
 	world.StickyClumpRate = cfg.StickyClumpRate
 
-	// SEED THE BACKGROUND VACUUM WAVES
-	// We fill the 3D domain with intersecting sine wave ripples
-	// to see if they naturally bottle or trigger Reverse Spleef
+	// Fallback to defaults if the agent leaves them unassigned
+	world.PhaseRelaxationRate = cfg.PhaseRelaxationRate
+	if world.PhaseRelaxationRate == 0 {
+		world.PhaseRelaxationRate = 0.1
+	}
+	world.TwistFollowRate = cfg.TwistFollowRate
+	if world.TwistFollowRate == 0 {
+		world.TwistFollowRate = 0.05
+	}
+
 	// SEED THE BACKGROUND VACUUM WAVES (WITH DUAL CHIRALITY)
-	// We divide the space in half along the X-axis to seed opposing phase twists
-	midX := world.Width / 2
+	//midX := world.Width / 2
+
+	// Divide the lattice along the X-axis into exact thirds to mimic a 2:1 structural footprint
+	twoThirdsX := (world.Width * 2) / 3
 
 	for x := 1; x < world.Width-1; x++ {
 		for y := 1; y < world.Height-1; y++ {
 			for z := 1; z < world.Depth-1; z++ {
-				// Base wave geometry
 				world.Cells[x][y][z].Fields.Amplitude = 3.5 * math.Sin(float64(x)*0.5)
 
-				if x < midX {
-					// Left-handed Domain: Positive Phase, Positive Twist
+				// 2/3 of space is seeded for positive Up Quark generations, 1/3 for Down Quarks
+				if x < twoThirdsX {
+					// Left-handed Domain: Positive Twist (Up Quark Bedding)
 					world.Cells[x][y][z].Fields.Phase = float64(y+z) * 0.2
-					world.Cells[x][y][z].Fields.V[1] = 1.0 // Clockwise Twist
+					world.Cells[x][y][z].Fields.V[1] = 1.0
 				} else {
-					// Right-handed Domain: Negative Phase, Negative Twist
+					// Right-handed Domain: Negative Twist (Down Quark Bedding)
 					world.Cells[x][y][z].Fields.Phase = float64(y+z) * -0.2
-					world.Cells[x][y][z].Fields.V[1] = -1.0 // Counterclockwise Twist
+					world.Cells[x][y][z].Fields.V[1] = -1.0
 				}
 			}
 		}
@@ -263,12 +273,53 @@ func (h *Handler) HandleWaveSweepRequest(c *gin.Context) {
 		}
 	}
 
+	// 🌟 FIX: Return the genuine uuid string under the "universe_id" key
 	c.JSON(http.StatusOK, gin.H{
-		"id": time.Now().UnixNano() % 1000,
+		"universe_id": universeID,
 		"result": gin.H{
 			"final_count":    totalActive,
 			"max_mass":       maxObservedMass,
 			"matter_pockets": int64(len(world.Tracers)),
 		},
+	})
+}
+
+func (h *Handler) GetUniverseInventory(c *gin.Context) {
+	id := c.Param("id")
+	world, exists, _ := h.WorldManager.GetUniverse(id)
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Universe missing"})
+		return
+	}
+
+	cookbook := types.NewParticleCookbook()
+
+	// Initialize inventory tally sheets
+	inventory := map[string]int64{
+		"Hydrogen Proton Core (H+)":      0,
+		"Hydrogen Electron Shell (e-)":   0,
+		"Up Quark (u)":                   0,
+		"Down Quark (d)":                 0,
+		"Electron Neutrino (v_e)":        0,
+		"Unperturbed Vacuum (Surface 0)": 0,
+	}
+
+	// Audit the entire 3D voxel grid space
+	for x := 0; x < world.Width; x++ {
+		for y := 0; y < world.Height; y++ {
+			for z := 0; z < world.Depth; z++ {
+				cell := world.Cells[x][y][z]
+
+				// Run the multivector properties against the recipe rules
+				identity := cookbook.IdentifyVoxel(cell.Fields)
+				inventory[identity]++
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"universe_id": id,
+		"grid_size":   world.Width,
+		"metrics":     inventory,
 	})
 }

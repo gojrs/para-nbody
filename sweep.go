@@ -11,17 +11,18 @@ import (
 )
 
 func main() {
+	baseURL := "https://pnbody-api.codethematrix.dev/api/v1/pnbody"
 	// UPGRADED TO LIVE SECURE HTTPS ENDPOINT
-	targetUrl := "https://pnbody-api.codethematrix.dev/api/v1/pnbody/wave-sweep"
+	targetUrl := fmt.Sprintf("%s/wave-sweep", baseURL)
 
 	gravities := []float64{0.001, 0.02}
 	repulsions := []float64{10.0, 500.0}
 
 	fmt.Println("🤖 Initializing Automated HTTPS Wave-Interference Sweep...")
-	fmt.Println("---------------------------------------------------------------------------------")
-	fmt.Printf("%-12s | %-12s | %-12s | %-14s | %-12s\n",
-		"Gravity G", "Repulsion", "Condensed Cells", "Max Peak Mass", "Tracer Pockets")
-	fmt.Println("---------------------------------------------------------------------------------")
+	fmt.Println("----------------------------------------------------------------------------------------------------")
+	fmt.Printf("%-10s | %-10s | %-15s | %-13s | %-40s\n",
+		"Gravity G", "Repulsion", "Condensed Cells", "Max Peak Mass", "Inventory Telemetry URL")
+	fmt.Println("----------------------------------------------------------------------------------------------------")
 
 	for _, g := range gravities {
 		for _, r := range repulsions {
@@ -43,7 +44,9 @@ func main() {
 				continue
 			}
 
+			// Capture the top-level "id" (the universe_id string) along with results
 			var apiRes struct {
+				ID     string `json:"universe_id"` // 🌟 Added to catch the raw creation ID from Gin
 				Result struct {
 					FinalCount    int64   `json:"final_count"`
 					MaxMass       float64 `json:"max_mass"`
@@ -57,11 +60,13 @@ func main() {
 			}
 			resp.Body.Close()
 
-			fmt.Printf("⚡ %10.3f | %10.1f | %12d | %14.2f | %12d\n",
-				g, r, apiRes.Result.FinalCount, apiRes.Result.MaxMass, apiRes.Result.MatterPockets)
+			// Print the clean table row with a direct copy-pasteable link to your Proxmox API instance
+			inventoryUrl := fmt.Sprintf("%s/%s/inventory", baseURL, apiRes.ID)
+			fmt.Printf("⚡ %8.3f | %9.1f | %15d | %13.2f | %-40s\n",
+				g, r, apiRes.Result.FinalCount, apiRes.Result.MaxMass, inventoryUrl)
 
 			time.Sleep(200 * time.Millisecond)
 		}
 	}
-	fmt.Println("---------------------------------------------------------------------------------")
+	fmt.Println("----------------------------------------------------------------------------------------------------")
 }

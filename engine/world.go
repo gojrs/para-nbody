@@ -2,6 +2,7 @@ package engine
 
 import (
 	"math"
+	"runtime"
 	"sync"
 
 	"github.com/gojrs/para-nbody/types"
@@ -16,9 +17,11 @@ type World struct {
 	Tracers           []types.TracerBody      `json:"tracers"`
 
 	// --- AUTOMATION RUNTIME FIELDS ---
-	GravitySensitivity float64 `json:"gravity_sensitivity"`
-	BaseMigrationRate  float64 `json:"base_migration_rate"`
-	StickyClumpRate    float64 `json:"sticky_clump_rate"`
+	GravitySensitivity  float64 `json:"gravity_sensitivity"`
+	BaseMigrationRate   float64 `json:"base_migration_rate"`
+	StickyClumpRate     float64 `json:"sticky_clump_rate"`
+	PhaseRelaxationRate float64 `json:"phase_relaxation_rate"` // 🌟 Parameterized
+	TwistFollowRate     float64 `json:"twist_follow_rate"`     // 🌟 Parameterized
 }
 
 func NewWorld(width, height, depth int) World {
@@ -111,189 +114,233 @@ func (w *World) Step() {
 	dz := [6]int{0, 0, 0, 0, 1, -1}
 
 	// 4. Dispatch Concurrent Spatial Workers
-	numWorkers := 4
-	xRangePerWorker := (w.Width - 2) / numWorkers
-	if xRangePerWorker < 1 {
-		xRangePerWorker = w.Width - 2
-		numWorkers = 1
+	// --- UPGRADED PASS 4: DYNAMIC 3D CUBICAL CHUNKING (MINECRAFT ENGINE PATTERN) ---
+	// Instead of thin 1D slices that cause heavy CPU cache thrashing during neighbor lookups,
+	// we partition the 3D grid into distinct sub-cubes. Each CPU core owns its own volume.
+	numCores := runtime.NumCPU()
+
+	// Determine how many chunks we can fit along each axis.
+	// For a 40x40x40 grid, a 3x3x3 layout gives 27 independent spatial volumes.
+	chunksPerAxis := int(math.Ceil(math.Cbrt(float64(numCores))))
+	if chunksPerAxis < 1 {
+		chunksPerAxis = 1
 	}
+
+	// Calculate the integer block dimensions for each chunk
+	chunkDimX := int(math.Ceil(float64(w.Width-2) / float64(chunksPerAxis)))
+	chunkDimY := int(math.Ceil(float64(w.Height-2) / float64(chunksPerAxis)))
+	chunkDimZ := int(math.Ceil(float64(w.Depth-2) / float64(chunksPerAxis)))
 
 	var wg sync.WaitGroup
 
 	const ConstructiveThreshold = 6.5
 	const DestructiveThreshold = -2.0
 
-	for workerID := 0; workerID < numWorkers; workerID++ {
-		startX := 1 + (workerID * xRangePerWorker)
-		endX := startX + xRangePerWorker
-		if workerID == numWorkers-1 {
-			endX = w.Width - 1
-		}
+	// Spawn the 3D chunk execution web
+	for cx := 0; cx < chunksPerAxis; cx++ {
+		for cy := 0; cy < chunksPerAxis; cy++ {
+			for cz := 0; cz < chunksPerAxis; cz++ {
 
-		wg.Add(1)
-		go func(sX, eX int) {
-			defer wg.Done()
+				// Calculate the absolute voxel bounding box for this specific chunk
+				startX := 1 + (cx * chunkDimX)
+				endX := startX + chunkDimX
+				if endX > w.Width-1 {
+					endX = w.Width - 1
+				}
 
-			for x := sX; x < eX; x++ {
-				for y := 1; y < w.Height-1; y++ {
-					for z := 1; z < w.Depth-1; z++ {
+				startY := 1 + (cy * chunkDimY)
+				endY := startY + chunkDimY
+				if endY > w.Height-1 {
+					endY = w.Height - 1
+				}
 
-						// --- PASS 1: WAVE INTERFERENCE & SPIN-LOCK TRAPPING ---
-						cell := w.Cells[x][y][z]
-						var netInterference float64 = 0.0
+				startZ := 1 + (cz * chunkDimZ)
+				endZ := startZ + chunkDimZ
+				if endZ > w.Depth-1 {
+					endZ = w.Depth - 1
+				}
 
-						for i := 0; i < 6; i++ {
-							nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
-							neigh := w.Cells[nx][ny][nz]
+				// If the bounding box is inverted or empty, skip spawning a thread
+				if startX >= endX || startY >= endY || startZ >= endZ {
+					continue
+				}
 
-							phaseDiff := cell.Fields.Phase - neigh.Fields.Phase
-							interference := cell.Fields.Amplitude * neigh.Fields.Amplitude * math.Cos(phaseDiff)
-							netInterference += interference
-						}
+				wg.Add(1)
+				go func(sX, eX, sY, eY, sZ, eZ int) {
+					defer wg.Done()
 
-						if netInterference >= ConstructiveThreshold {
-							nextCells[x][y][z].Fields.V[3] += netInterference * 0.15
-							nextCells[x][y][z].Fields.V[0] += netInterference * 0.5
-							nextCells[x][y][z].Fields.Amplitude *= 0.1
-						} else if netInterference <= DestructiveThreshold {
-							nextCells[x][y][z].Fields.V[3] += 0.5
-							nextCells[x][y][z].Fields.Phase *= 0.5
-						}
+					for x := sX; x < eX; x++ {
+						for y := sY; y < eY; y++ {
+							for z := sZ; z < eZ; z++ {
 
-						// --- PASS 2: GEOMETRIC SURFACE DISTANCE IMPEDANCE & NEIGHBORHOOD ATTRACTION ---
-						mVal := nextCells[x][y][z].Fields.V[3]
-						aVal := nextCells[x][y][z].Fields.V[4]
+								// --- PASS 1: WAVE INTERFERENCE & SPIN-LOCK TRAPPING ---
+								cell := w.Cells[x][y][z]
+								var netInterference float64 = 0.0
 
-						if mVal <= 0 && aVal <= 0 {
-							continue
-						}
+								for i := 0; i < 6; i++ {
+									nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
+									neigh := w.Cells[nx][ny][nz]
 
-						netCurvature := mVal - aVal
-						distanceFromSurface := math.Abs(netCurvature)
+									phaseDiff := cell.Fields.Phase - neigh.Fields.Phase
+									interference := cell.Fields.Amplitude * neigh.Fields.Amplitude * math.Cos(phaseDiff)
+									netInterference += interference
+								}
 
-						const SpatialRigidityConstant = 0.15
-						dragFactor := 1.0 / (1.0 + (distanceFromSurface * SpatialRigidityConstant))
+								if netInterference >= ConstructiveThreshold {
+									nextCells[x][y][z].Fields.V[3] += netInterference * 0.15
+									nextCells[x][y][z].Fields.V[0] += netInterference * 0.5
+									nextCells[x][y][z].Fields.Amplitude *= 0.1
+								} else if netInterference <= DestructiveThreshold {
+									nextCells[x][y][z].Fields.V[3] += 0.5
+									nextCells[x][y][z].Fields.Phase *= 0.5
+								}
 
-						// Local Neighborhood Gravity Pull (2-voxel envelope)
-						var pullX, pullY, pullZ float64
-						// NEW: Electrical Twist Acceleration Gradient vectors
-						var elecX, elecY, elecZ float64
+								// --- PASS 2: GEOMETRIC SURFACE DISTANCE IMPEDANCE & NEIGHBORHOOD ATTRACTION ---
+								mVal := nextCells[x][y][z].Fields.V[3]
+								aVal := nextCells[x][y][z].Fields.V[4]
 
-						for dxLocal := -3; dxLocal <= 3; dxLocal++ {
-							for dyLocal := -3; dyLocal <= 3; dyLocal++ {
-								for dzLocal := -3; dzLocal <= 3; dzLocal++ {
-									nx, ny, nz := x+dxLocal, y+dyLocal, z+dzLocal
+								if mVal > 0 || aVal > 0 {
+									netCurvature := mVal - aVal
+									distanceFromSurface := math.Abs(netCurvature)
 
-									if nx >= 0 && nx < w.Width && ny >= 0 && ny < w.Height && nz >= 0 && nz < w.Depth {
-										targetCell := w.Cells[nx][ny][nz]
-										distSq := float64(dxLocal*dxLocal + dyLocal*dyLocal + dzLocal*dzLocal)
+									const SpatialRigidityConstant = 0.15
+									dragFactor := 1.0 / (1.0 + (distanceFromSurface * SpatialRigidityConstant))
 
-										if distSq > 0 {
-											// Mass gravity contribution (up to 2 voxels out)
-											if math.Abs(float64(dxLocal)) <= 2 && math.Abs(float64(dyLocal)) <= 2 && math.Abs(float64(dzLocal)) <= 2 {
-												if targetCell.Fields.V[3] > 0 {
-													force := targetCell.Fields.V[3] / distSq
-													pullX += (float64(dxLocal) / math.Sqrt(distSq)) * force
-													pullY += (float64(dyLocal) / math.Sqrt(distSq)) * force
-													pullZ += (float64(dzLocal) / math.Sqrt(distSq)) * force
+									var pullX, pullY, pullZ float64
+									var elecX, elecY, elecZ float64
+
+									for dxLocal := -3; dxLocal <= 3; dxLocal++ {
+										for dyLocal := -3; dyLocal <= 3; dyLocal++ {
+											for dzLocal := -3; dzLocal <= 3; dzLocal++ {
+												nx, ny, nz := x+dxLocal, y+dyLocal, z+dzLocal
+
+												if nx >= 0 && nx < w.Width && ny >= 0 && ny < w.Height && nz >= 0 && nz < w.Depth {
+													targetCell := w.Cells[nx][ny][nz]
+													distSq := float64(dxLocal*dxLocal + dyLocal*dyLocal + dzLocal*dzLocal)
+
+													if distSq > 0 {
+														if math.Abs(float64(dxLocal)) <= 2 && math.Abs(float64(dyLocal)) <= 2 && math.Abs(float64(dzLocal)) <= 2 {
+															if targetCell.Fields.V[3] > 0 {
+																force := targetCell.Fields.V[3] / distSq
+																pullX += (float64(dxLocal) / math.Sqrt(distSq)) * force
+																pullY += (float64(dyLocal) / math.Sqrt(distSq)) * force
+																pullZ += (float64(dzLocal) / math.Sqrt(distSq)) * force
+															}
+														}
+
+														neighborTwist := targetCell.Fields.V[1]
+														if neighborTwist != 0 {
+															chargeInteraction := cell.Fields.V[1] * neighborTwist
+															var twistForce float64
+															if chargeInteraction < 0 {
+																twistForce = math.Abs(chargeInteraction) / distSq
+															} else {
+																twistForce = -(chargeInteraction) / distSq
+															}
+
+															elecX += (float64(dxLocal) / math.Sqrt(distSq)) * twistForce
+															elecY += (float64(dyLocal) / math.Sqrt(distSq)) * twistForce
+															elecZ += (float64(dzLocal) / math.Sqrt(distSq)) * twistForce
+														}
+													}
 												}
-											}
-
-											// LONG-RANGE ELECTRICAL TWIST contributed up to 3 voxels out
-											neighborTwist := targetCell.Fields.V[1]
-											if neighborTwist != 0 {
-												// Coulomb imitation rule: Opposite charges attract, like charges repel
-												// We multiply active cell twist by neighbor twist to establish orientation
-												chargeInteraction := cell.Fields.V[1] * neighborTwist
-
-												var twistForce float64
-												if chargeInteraction < 0 {
-													twistForce = math.Abs(chargeInteraction) / distSq // Attraction
-												} else {
-													twistForce = -(chargeInteraction) / distSq // Repulsion
-												}
-
-												elecX += (float64(dxLocal) / math.Sqrt(distSq)) * twistForce
-												elecY += (float64(dyLocal) / math.Sqrt(distSq)) * twistForce
-												elecZ += (float64(dzLocal) / math.Sqrt(distSq)) * twistForce
 											}
 										}
 									}
+
+									var mWeights, aWeights [6]float64
+									var mTotalWeight, aTotalWeight float64
+
+									for i := 0; i < 6; i++ {
+										nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
+										neigh := w.Cells[nx][ny][nz]
+
+										localPullFactor := 0.0
+										if dx[i] != 0 {
+											localPullFactor = pullX * float64(dx[i])
+										}
+										if dy[i] != 0 {
+											localPullFactor = pullY * float64(dy[i])
+										}
+										if dz[i] != 0 {
+											localPullFactor = pullZ * float64(dz[i])
+										}
+
+										localTwistFactor := 0.0
+										if dx[i] != 0 {
+											localTwistFactor = elecX * float64(dx[i])
+										}
+										if dy[i] != 0 {
+											localTwistFactor = elecY * float64(dy[i])
+										}
+										if dz[i] != 0 {
+											localTwistFactor = elecZ * float64(dz[i])
+										}
+
+										mWeights[i] = 1.0 + (neigh.Fields.V[3] * 0.5) - (neigh.Fields.V[4] * 0.2 * w.RepulsionStrength) + (localPullFactor * 0.1) + (localTwistFactor * 0.15)
+										if mWeights[i] < 0.001 {
+											mWeights[i] = 0.001
+										}
+										mTotalWeight += mWeights[i]
+
+										aWeights[i] = 1.0 + (neigh.Fields.V[4] * 0.5) - (neigh.Fields.V[3] * 0.2 * w.RepulsionStrength)
+										if aWeights[i] < 0.001 {
+											aWeights[i] = 0.001
+										}
+										aTotalWeight += aWeights[i]
+									}
+
+									mMigrationRate := w.BaseMigrationRate
+									if mVal > 5.0 {
+										mMigrationRate = w.StickyClumpRate
+									}
+									aMigrationRate := w.BaseMigrationRate
+									if aVal > 5.0 {
+										aMigrationRate = w.StickyClumpRate
+									}
+
+									mOutTotal := mVal * mMigrationRate * dragFactor
+									aOutTotal := aVal * aMigrationRate * dragFactor
+
+									nextCells[x][y][z].Fields.V[3] -= mOutTotal
+									nextCells[x][y][z].Fields.V[4] -= aOutTotal
+
+									for i := 0; i < 6; i++ {
+										nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
+										if mOutTotal > 0 && mTotalWeight > 0 {
+											nextCells[nx][ny][nz].Fields.V[3] += mOutTotal * (mWeights[i] / mTotalWeight)
+										}
+										if aOutTotal > 0 && aTotalWeight > 0 {
+											nextCells[nx][ny][nz].Fields.V[4] += aOutTotal * (aWeights[i] / aTotalWeight)
+										}
+									}
 								}
-							}
-						}
 
-						var mWeights, aWeights [6]float64
-						var mTotalWeight, aTotalWeight float64
+								// --- PASS 3: LATTICE PHASE RELAXATION ---
+								var netPhaseGlow float64 = 0.0
+								var neighborCount float64 = 0.0
 
-						for i := 0; i < 6; i++ {
-							nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
-							neigh := w.Cells[nx][ny][nz]
+								for i := 0; i < 6; i++ {
+									nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
+									if nx >= 0 && nx < w.Width && ny >= 0 && ny < w.Height && nz >= 0 && nz < w.Depth {
+										netPhaseGlow += w.Cells[nx][ny][nz].Fields.Phase
+										neighborCount++
+									}
+								}
 
-							localPullFactor := 0.0
-							if dx[i] != 0 {
-								localPullFactor = pullX * float64(dx[i])
-							}
-							if dy[i] != 0 {
-								localPullFactor = pullY * float64(dy[i])
-							}
-							if dz[i] != 0 {
-								localPullFactor = pullZ * float64(dz[i])
-							}
+								if neighborCount > 0 {
+									averageNeighborPhase := netPhaseGlow / neighborCount
+									nextCells[x][y][z].Fields.Phase += (averageNeighborPhase - cell.Fields.Phase) * w.PhaseRelaxationRate
+									nextCells[x][y][z].Fields.V[1] += (averageNeighborPhase - cell.Fields.Phase) * w.TwistFollowRate
+								}
 
-							localTwistFactor := 0.0
-							if dx[i] != 0 {
-								localTwistFactor = elecX * float64(dx[i])
-							}
-							if dy[i] != 0 {
-								localTwistFactor = elecY * float64(dy[i])
-							}
-							if dz[i] != 0 {
-								localTwistFactor = elecZ * float64(dz[i])
-							}
-
-							// Merge both mass attraction and electrical gradient changes into fluid weights
-							mWeights[i] = 1.0 + (neigh.Fields.V[3] * 0.5) - (neigh.Fields.V[4] * 0.2 * w.RepulsionStrength) + (localPullFactor * 0.1) + (localTwistFactor * 0.15)
-							if mWeights[i] < 0.001 {
-								mWeights[i] = 0.001
-							}
-							mTotalWeight += mWeights[i]
-
-							aWeights[i] = 1.0 + (neigh.Fields.V[4] * 0.5) - (neigh.Fields.V[3] * 0.2 * w.RepulsionStrength)
-							if aWeights[i] < 0.001 {
-								aWeights[i] = 0.001
-							}
-							aTotalWeight += aWeights[i]
-						}
-
-						mMigrationRate := w.BaseMigrationRate
-						if mVal > 5.0 {
-							mMigrationRate = w.StickyClumpRate
-						}
-						aMigrationRate := w.BaseMigrationRate
-						if aVal > 5.0 {
-							aMigrationRate = w.StickyClumpRate
-						}
-
-						mOutTotal := mVal * mMigrationRate * dragFactor
-						aOutTotal := aVal * aMigrationRate * dragFactor
-
-						nextCells[x][y][z].Fields.V[3] -= mOutTotal
-						nextCells[x][y][z].Fields.V[4] -= aOutTotal
-
-						for i := 0; i < 6; i++ {
-							nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
-							if mOutTotal > 0 && mTotalWeight > 0 {
-								nextCells[nx][ny][nz].Fields.V[3] += mOutTotal * (mWeights[i] / mTotalWeight)
-							}
-							if aOutTotal > 0 && aTotalWeight > 0 {
-								nextCells[nx][ny][nz].Fields.V[4] += aOutTotal * (aWeights[i] / aTotalWeight)
 							}
 						}
 					}
-				}
+				}(startX, endX, startY, endY, startZ, endZ)
+
 			}
-		}(startX, endX)
+		}
 	}
 
 	wg.Wait()
@@ -372,52 +419,5 @@ func (w *World) Step() {
 		tracer.Position[0] += tracer.Velocity[0]
 		tracer.Position[1] += tracer.Velocity[1]
 		tracer.Position[2] += tracer.Velocity[2]
-	}
-}
-
-const (
-	ConstructiveThreshold = 15.0 // Amplitude spike required to "bottle" a particle
-	DestructiveThreshold  = -5.0 // Cancellation depth required to trigger "Reverse Spleef" injection
-)
-
-func (w *World) ProcessWaveMechanics() {
-	dx := [6]int{1, -1, 0, 0, 0, 0}
-	dy := [6]int{0, 0, 1, -1, 0, 0}
-	dz := [6]int{0, 0, 0, 0, 1, -1}
-
-	// We can process this within your parallelized worker segments safely
-	for x := 1; x < w.Width-1; x++ {
-		for y := 1; y < w.Height-1; y++ {
-			for z := 1; z < w.Depth-1; z++ {
-				cell := &w.Cells[x][y][z]
-
-				var netInterference float64 = 0.0
-
-				// Sample all 6 spatial directions to calculate interference patterns
-				for i := 0; i < 6; i++ {
-					nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
-					neighbor := w.Cells[nx][ny][nz]
-
-					// Standard wave interference equation: A1 * A2 * cos(phase_difference)
-					phaseDiff := cell.Fields.Phase - neighbor.Fields.Phase
-					interference := cell.Fields.Amplitude * neighbor.Fields.Amplitude * math.Cos(phaseDiff)
-					netInterference += interference
-				}
-
-				// Execute your structural state updates based on your Wave Rules:
-				if netInterference >= ConstructiveThreshold {
-					// 1. Constructive Max: Waves stack and condense into a localized "bottled" unit!
-					// We transfer loose grid energy into a locked mass channel
-					cell.Fields.V[3] += netInterference * 0.1
-					cell.Fields.Amplitude = 0 // The wave collapses/flattens into the mass node
-
-				} else if netInterference <= DestructiveThreshold {
-					// 2. Destructive Max: Waves cancel! Reverse Spleef mechanism activates
-					// Space injects a fresh baseline field unit to restore ledger balance
-					cell.Fields.V[3] += 1.0 // Injection unit padding
-					cell.Fields.Phase = 0   // Reset phase structure locally
-				}
-			}
-		}
 	}
 }
