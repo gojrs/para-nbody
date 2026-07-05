@@ -216,12 +216,25 @@ func (h *Handler) HandleWaveSweepRequest(c *gin.Context) {
 	// SEED THE BACKGROUND VACUUM WAVES
 	// We fill the 3D domain with intersecting sine wave ripples
 	// to see if they naturally bottle or trigger Reverse Spleef
+	// SEED THE BACKGROUND VACUUM WAVES (WITH DUAL CHIRALITY)
+	// We divide the space in half along the X-axis to seed opposing phase twists
+	midX := world.Width / 2
+
 	for x := 1; x < world.Width-1; x++ {
 		for y := 1; y < world.Height-1; y++ {
 			for z := 1; z < world.Depth-1; z++ {
-				// Generate spatial phase and amplitude gradients
+				// Base wave geometry
 				world.Cells[x][y][z].Fields.Amplitude = 3.5 * math.Sin(float64(x)*0.5)
-				world.Cells[x][y][z].Fields.Phase = float64(y+z) * 0.2
+
+				if x < midX {
+					// Left-handed Domain: Positive Phase, Positive Twist
+					world.Cells[x][y][z].Fields.Phase = float64(y+z) * 0.2
+					world.Cells[x][y][z].Fields.V[1] = 1.0 // Clockwise Twist
+				} else {
+					// Right-handed Domain: Negative Phase, Negative Twist
+					world.Cells[x][y][z].Fields.Phase = float64(y+z) * -0.2
+					world.Cells[x][y][z].Fields.V[1] = -1.0 // Counterclockwise Twist
+				}
 			}
 		}
 	}

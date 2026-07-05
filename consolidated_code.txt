@@ -132,6 +132,90 @@ func (m Multivector) NetCurvature() float64 {
 	return m.V[3] - m.V[4]
 }
 
+// ---- GEOMETRIC COOKBOOK REGISTRY ----
+
+// SpatialArchitecture represents the pure geometric requirements for a state
+type SpatialArchitecture struct {
+	MinCompression float64 // Depth into the +W side
+	RequiredTwist  float64 // Electrical phase alignment on the V axis
+}
+
+// HumanLabel is our interface translation layer
+type HumanLabel interface {
+	HumanName() string
+	CheckGeometry(mv Multivector) bool
+}
+
+// ProtonClass satisfies the HumanLabel interface via implicit composition
+type ProtonClass struct {
+	Architecture SpatialArchitecture
+}
+
+func NewProtonClass() ProtonClass {
+	return ProtonClass{
+		Architecture: SpatialArchitecture{
+			MinCompression: 50.0,
+			RequiredTwist:  1.0,
+		},
+	}
+}
+
+func (p ProtonClass) HumanName() string {
+	return "Hydrogen Proton Core (H+)"
+}
+
+func (p ProtonClass) CheckGeometry(mv Multivector) bool {
+	// Translates our human label to raw geometric validation
+	return mv.V[3] >= p.Architecture.MinCompression && mv.V[1] >= p.Architecture.RequiredTwist
+}
+
+// ElectronClass satisfies the HumanLabel interface
+type ElectronClass struct {
+	Architecture SpatialArchitecture
+}
+
+func NewElectronClass() ElectronClass {
+	return ElectronClass{
+		Architecture: SpatialArchitecture{
+			MinCompression: 0.1,  // Extremely light spatial compression depth
+			RequiredTwist:  -1.0, // Negative orthogonal phase twist (opposite of Proton)
+		},
+	}
+}
+
+func (e ElectronClass) HumanName() string {
+	return "Hydrogen Electron Shell (e-)"
+}
+
+func (e ElectronClass) CheckGeometry(mv Multivector) bool {
+	// Validates if a coordinate voxel matches the geometric footprint of an electron
+	// It must have a minimum baseline presence, but its Lattice Twist must be deeply negative
+	return mv.V[3] >= e.Architecture.MinCompression && mv.V[1] <= e.Architecture.RequiredTwist
+}
+
+type ParticleCookbook struct {
+	Decoders []HumanLabel
+}
+
+func NewParticleCookbook() *ParticleCookbook {
+	return &ParticleCookbook{
+		Decoders: []HumanLabel{
+			NewProtonClass(),
+			NewElectronClass(),
+		},
+	}
+}
+
+// IdentifyVoxel checks the raw geometry against the cookbook recipes
+func (cb *ParticleCookbook) IdentifyVoxel(mv Multivector) string {
+	for _, decoder := range cb.Decoders {
+		if decoder.CheckGeometry(mv) {
+			return decoder.HumanName()
+		}
+	}
+	return "Unperturbed Vacuum (Surface 0)"
+}
+
 // TracerBody represents a continuous "bottled" unit traveling through the discrete grid.
 type TracerBody struct {
 	ID       string     `json:"id"`
@@ -163,6 +247,86 @@ type NBodyConfig struct {
 type NBodyResult struct {
 	FinalCount int64   `json:"final_count"`
 	MaxMass    float64 `json:"max_mass"`
+}
+
+
+=== FILE: ./types/recipes.go ===
+package types
+
+// GeometricRecipe defines the "shopping list" of spatial dimensions
+// required to cook or stabilize a specific sub-atomic particle architecture.
+type GeometricRecipe struct {
+	Name               string
+	TargetCompression  float64 // Minimum +W or -W depth required
+	RequiredTwistPhase float64 // The electrical orientation on the orthogonal axis
+	RequiredSpin       float64 // Intrinsic angular matrix rotation
+}
+
+// ParticleClass defines the interface for how a bottled knot interacts with the world
+type ParticleClass interface {
+	GetName() string
+	EvaluateStability(currentCurvature float64, localTwist float64) bool
+}
+
+// Proton Configuration
+type Proton struct {
+	BaseMass float64
+	Charge   float64 // +1 Human Label
+}
+
+func (p Proton) GetName() string { return "Proton Core" }
+func (p Proton) EvaluateStability(wDepth float64, vTwist float64) bool {
+	// A Proton is stable only if it maintains a deep compression valley
+	// AND a positive orthogonal twist phase
+	return wDepth > 50.0 && vTwist > 0.5
+}
+
+// Electron Configuration
+type Electron struct {
+	BaseMass float64
+	Charge   float64 // -1 Human Label
+}
+
+func (e Electron) GetName() string { return "Electron Shell Envelope" }
+func (e Electron) EvaluateStability(wDepth float64, vTwist float64) bool {
+	// An Electron has low compression depth but a highly agile negative twist phase
+	return wDepth > 0.1 && vTwist < -0.5
+}
+
+
+=== FILE: ./types/fundamental_recipes.go ===
+package types
+
+import "math"
+
+// UpQuarkClass represents a fractional, high-compression twist configuration
+type UpQuarkClass struct{}
+
+func (u UpQuarkClass) HumanName() string { return "Up Quark (u)" }
+func (u UpQuarkClass) CheckGeometry(mv Multivector) bool {
+	// High compression depth, positive electrical lattice twist
+	return mv.V[3] > 15.0 && mv.V[1] > 0.3
+}
+
+// DownQuarkClass represents the opposite fractional twist configuration
+type DownQuarkClass struct{}
+
+func (u DownQuarkClass) HumanName() string { return "Down Quark (d)" }
+func (u DownQuarkClass) CheckGeometry(mv Multivector) bool {
+	// High compression depth, light negative electrical lattice twist
+	return mv.V[3] > 15.0 && mv.V[1] < -0.1 && mv.V[1] > -0.4
+}
+
+// NeutrinoClass represents the Off-Surface Neutrality State
+type NeutrinoClass struct{}
+
+func (n NeutrinoClass) HumanName() string { return "Electron Neutrino (v_e)" }
+func (n NeutrinoClass) CheckGeometry(mv Multivector) bool {
+	netCurvature := mv.V[3] - mv.V[4] // Net W displacement
+	totalEnergy := mv.V[3] + mv.V[4]  // Total physical payload presence
+
+	// It is neutral (Net Curvature is close to 0) AND it is off the surface (Total Energy exists)
+	return math.Abs(netCurvature) < 0.01 && totalEnergy > 1.0 && math.Abs(mv.V[1]) < 0.05
 }
 
 
@@ -382,12 +546,24 @@ func (w *World) CloneCells() [][][]types.LedgerState {
 }
 
 func (w *World) Step() {
-	// 1. Clear out temporary tracer mass injections to prevent stack explosions
-	for x := 0; x < w.Width; x++ {
-		for y := 0; y < w.Height; y++ {
-			for z := 0; z < w.Depth; z++ {
-				w.Cells[x][y][z].Fields.V[3] = 0
-				w.Cells[x][y][z].Fields.V[4] = 0
+	// 1. Only subtract mass from cells occupied by actual tracers
+	// This preserves dynamically generated wave condensation across the rest of the vacuum!
+	for _, tracer := range w.Tracers {
+		tx := int(math.Round(tracer.Position[0]))
+		ty := int(math.Round(tracer.Position[1]))
+		tz := int(math.Round(tracer.Position[2]))
+
+		if tx > 0 && tx < w.Width-1 && ty > 0 && ty < w.Height-1 && tz > 0 && tz < w.Depth-1 {
+			if tracer.IsMatter {
+				w.Cells[tx][ty][tz].Fields.V[3] -= tracer.BaseMass
+				if w.Cells[tx][ty][tz].Fields.V[3] < 0 {
+					w.Cells[tx][ty][tz].Fields.V[3] = 0
+				}
+			} else {
+				w.Cells[tx][ty][tz].Fields.V[4] -= tracer.BaseMass
+				if w.Cells[tx][ty][tz].Fields.V[4] < 0 {
+					w.Cells[tx][ty][tz].Fields.V[4] = 0
+				}
 			}
 		}
 	}
@@ -408,7 +584,7 @@ func (w *World) Step() {
 	}
 
 	// 3. Initialize transactional nextCells buffer
-	nextCells := w.CloneCells() // Clone existing baseline states to preserve persistent fields
+	nextCells := w.CloneCells()
 
 	dx := [6]int{1, -1, 0, 0, 0, 0}
 	dy := [6]int{0, 0, 1, -1, 0, 0}
@@ -424,8 +600,9 @@ func (w *World) Step() {
 
 	var wg sync.WaitGroup
 
-	const ConstructiveThreshold = 12.0
-	const DestructiveThreshold = -4.0
+	// ADJUSTED THRESHOLDS: Calibrated to match the mathematical scale of your seeded sine waves
+	const ConstructiveThreshold = 6.5
+	const DestructiveThreshold = -2.0
 
 	for workerID := 0; workerID < numWorkers; workerID++ {
 		startX := 1 + (workerID * xRangePerWorker)
@@ -442,7 +619,7 @@ func (w *World) Step() {
 				for y := 1; y < w.Height-1; y++ {
 					for z := 1; z < w.Depth-1; z++ {
 
-						// --- PASS 1: WAVE INTERFERENCE GEOMETRY ---
+						// --- PASS 1: WAVE INTERFERENCE & SPIN-LOCK TRAPPING ---
 						cell := w.Cells[x][y][z]
 						var netInterference float64 = 0.0
 
@@ -455,17 +632,23 @@ func (w *World) Step() {
 							netInterference += interference
 						}
 
-						// Direct modifications made safely to nextCells persistent tracking lines
 						if netInterference >= ConstructiveThreshold {
-							nextCells[x][y][z].Fields.V[3] += netInterference * 0.1
-							nextCells[x][y][z].Fields.Amplitude = 0.0
+							// Constructive Max: Packets stack and condense into persistent localized matter (+W, Red)
+							nextCells[x][y][z].Fields.V[3] += netInterference * 0.15
+
+							// SPATIAL VORTEX ACTION: Energy throws its angular momentum into the V[0] Spin channel
+							// This creates the "arms wrapping around" effect to trap the wave.
+							nextCells[x][y][z].Fields.V[0] += netInterference * 0.5
+
+							// Flatten the loose wave packet since it is now bottled
+							nextCells[x][y][z].Fields.Amplitude *= 0.1
 						} else if netInterference <= DestructiveThreshold {
-							nextCells[x][y][z].Fields.V[3] += 1.0
-							nextCells[x][y][z].Fields.Phase = 0.0
+							// Destructive Max: Reverse Spleef injects baseline units to stabilize the ledger
+							nextCells[x][y][z].Fields.V[3] += 0.5
+							nextCells[x][y][z].Fields.Phase *= 0.5
 						}
 
-						// --- PASS 2: FLUID MIGRATION OVER CONDENSED FIELD LAYERS ---
-						// Read the updated mass layout from our working frame
+						// --- PASS 2: GEOMETRIC SURFACE DISTANCE IMPEDANCE & NEIGHBORHOOD ATTRACTION ---
 						mVal := nextCells[x][y][z].Fields.V[3]
 						aVal := nextCells[x][y][z].Fields.V[4]
 
@@ -473,7 +656,39 @@ func (w *World) Step() {
 							continue
 						}
 
-						dragFactor := 1.0 / (1.0 + 0.15*(mVal+aVal))
+						// Calculate absolute displacement from Surface 0 (W = 0)
+						netCurvature := mVal - aVal
+						distanceFromSurface := math.Abs(netCurvature)
+
+						// Lattice Impedance Factor: The deeper from the surface, the higher the viscous resistance
+						const SpatialRigidityConstant = 0.15
+						dragFactor := 1.0 / (1.0 + (distanceFromSurface * SpatialRigidityConstant))
+
+						// Local Neighborhood Gravity Pull (Sample 2 voxels out in an envelope)
+						var pullX, pullY, pullZ float64
+						for dxLocal := -2; dxLocal <= 2; dxLocal++ {
+							for dyLocal := -2; dyLocal <= 2; dyLocal++ {
+								for dzLocal := -2; dzLocal <= 2; dzLocal++ {
+									nx, ny, nz := x+dxLocal, y+dyLocal, z+dzLocal
+
+									// Boundary safety optimization
+									if nx >= 0 && nx < w.Width && ny >= 0 && ny < w.Height && nz >= 0 && nz < w.Depth {
+										neighborMass := w.Cells[nx][ny][nz].Fields.V[3]
+										if neighborMass > 0 {
+											distSq := float64(dxLocal*dxLocal + dyLocal*dyLocal + dzLocal*dzLocal)
+											if distSq > 0 {
+												// 1/r^2 inverse square force scaling
+												force := neighborMass / distSq
+												pullX += (float64(dxLocal) / math.Sqrt(distSq)) * force
+												pullY += (float64(dyLocal) / math.Sqrt(distSq)) * force
+												pullZ += (float64(dzLocal) / math.Sqrt(distSq)) * force
+											}
+										}
+									}
+								}
+							}
+						}
+
 						var mWeights, aWeights [6]float64
 						var mTotalWeight, aTotalWeight float64
 
@@ -481,7 +696,19 @@ func (w *World) Step() {
 							nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
 							neigh := w.Cells[nx][ny][nz]
 
-							mWeights[i] = 1.0 + (neigh.Fields.V[3] * 0.5) - (neigh.Fields.V[4] * 0.2 * w.RepulsionStrength)
+							// Factor local directional gravity pulling into the standard migration weights
+							localPullFactor := 0.0
+							if dx[i] != 0 {
+								localPullFactor = pullX * float64(dx[i])
+							}
+							if dy[i] != 0 {
+								localPullFactor = pullY * float64(dy[i])
+							}
+							if dz[i] != 0 {
+								localPullFactor = pullZ * float64(dz[i])
+							}
+
+							mWeights[i] = 1.0 + (neigh.Fields.V[3] * 0.5) - (neigh.Fields.V[4] * 0.2 * w.RepulsionStrength) + (localPullFactor * 0.1)
 							if mWeights[i] < 0.001 {
 								mWeights[i] = 0.001
 							}
@@ -503,10 +730,10 @@ func (w *World) Step() {
 							aMigrationRate = w.StickyClumpRate
 						}
 
+						// Apply custom manifold-distance drag modifier to the fluid transfer execution
 						mOutTotal := mVal * mMigrationRate * dragFactor
 						aOutTotal := aVal * aMigrationRate * dragFactor
 
-						// Conserve and apply step changes directly onto the active workspace lines
 						nextCells[x][y][z].Fields.V[3] -= mOutTotal
 						nextCells[x][y][z].Fields.V[4] -= aOutTotal
 
@@ -935,12 +1162,25 @@ func (h *Handler) HandleWaveSweepRequest(c *gin.Context) {
 	// SEED THE BACKGROUND VACUUM WAVES
 	// We fill the 3D domain with intersecting sine wave ripples
 	// to see if they naturally bottle or trigger Reverse Spleef
+	// SEED THE BACKGROUND VACUUM WAVES (WITH DUAL CHIRALITY)
+	// We divide the space in half along the X-axis to seed opposing phase twists
+	midX := world.Width / 2
+
 	for x := 1; x < world.Width-1; x++ {
 		for y := 1; y < world.Height-1; y++ {
 			for z := 1; z < world.Depth-1; z++ {
-				// Generate spatial phase and amplitude gradients
+				// Base wave geometry
 				world.Cells[x][y][z].Fields.Amplitude = 3.5 * math.Sin(float64(x)*0.5)
-				world.Cells[x][y][z].Fields.Phase = float64(y+z) * 0.2
+
+				if x < midX {
+					// Left-handed Domain: Positive Phase, Positive Twist
+					world.Cells[x][y][z].Fields.Phase = float64(y+z) * 0.2
+					world.Cells[x][y][z].Fields.V[1] = 1.0 // Clockwise Twist
+				} else {
+					// Right-handed Domain: Negative Phase, Negative Twist
+					world.Cells[x][y][z].Fields.Phase = float64(y+z) * -0.2
+					world.Cells[x][y][z].Fields.V[1] = -1.0 // Counterclockwise Twist
+				}
 			}
 		}
 	}

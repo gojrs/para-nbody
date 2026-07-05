@@ -42,6 +42,90 @@ func (m Multivector) NetCurvature() float64 {
 	return m.V[3] - m.V[4]
 }
 
+// ---- GEOMETRIC COOKBOOK REGISTRY ----
+
+// SpatialArchitecture represents the pure geometric requirements for a state
+type SpatialArchitecture struct {
+	MinCompression float64 // Depth into the +W side
+	RequiredTwist  float64 // Electrical phase alignment on the V axis
+}
+
+// HumanLabel is our interface translation layer
+type HumanLabel interface {
+	HumanName() string
+	CheckGeometry(mv Multivector) bool
+}
+
+// ProtonClass satisfies the HumanLabel interface via implicit composition
+type ProtonClass struct {
+	Architecture SpatialArchitecture
+}
+
+func NewProtonClass() ProtonClass {
+	return ProtonClass{
+		Architecture: SpatialArchitecture{
+			MinCompression: 50.0,
+			RequiredTwist:  1.0,
+		},
+	}
+}
+
+func (p ProtonClass) HumanName() string {
+	return "Hydrogen Proton Core (H+)"
+}
+
+func (p ProtonClass) CheckGeometry(mv Multivector) bool {
+	// Translates our human label to raw geometric validation
+	return mv.V[3] >= p.Architecture.MinCompression && mv.V[1] >= p.Architecture.RequiredTwist
+}
+
+// ElectronClass satisfies the HumanLabel interface
+type ElectronClass struct {
+	Architecture SpatialArchitecture
+}
+
+func NewElectronClass() ElectronClass {
+	return ElectronClass{
+		Architecture: SpatialArchitecture{
+			MinCompression: 0.1,  // Extremely light spatial compression depth
+			RequiredTwist:  -1.0, // Negative orthogonal phase twist (opposite of Proton)
+		},
+	}
+}
+
+func (e ElectronClass) HumanName() string {
+	return "Hydrogen Electron Shell (e-)"
+}
+
+func (e ElectronClass) CheckGeometry(mv Multivector) bool {
+	// Validates if a coordinate voxel matches the geometric footprint of an electron
+	// It must have a minimum baseline presence, but its Lattice Twist must be deeply negative
+	return mv.V[3] >= e.Architecture.MinCompression && mv.V[1] <= e.Architecture.RequiredTwist
+}
+
+type ParticleCookbook struct {
+	Decoders []HumanLabel
+}
+
+func NewParticleCookbook() *ParticleCookbook {
+	return &ParticleCookbook{
+		Decoders: []HumanLabel{
+			NewProtonClass(),
+			NewElectronClass(),
+		},
+	}
+}
+
+// IdentifyVoxel checks the raw geometry against the cookbook recipes
+func (cb *ParticleCookbook) IdentifyVoxel(mv Multivector) string {
+	for _, decoder := range cb.Decoders {
+		if decoder.CheckGeometry(mv) {
+			return decoder.HumanName()
+		}
+	}
+	return "Unperturbed Vacuum (Surface 0)"
+}
+
 // TracerBody represents a continuous "bottled" unit traveling through the discrete grid.
 type TracerBody struct {
 	ID       string     `json:"id"`

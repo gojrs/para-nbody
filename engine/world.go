@@ -68,7 +68,6 @@ func (w *World) CloneCells() [][][]types.LedgerState {
 
 func (w *World) Step() {
 	// 1. Only subtract mass from cells occupied by actual tracers
-	// This preserves dynamically generated wave condensation across the rest of the vacuum!
 	for _, tracer := range w.Tracers {
 		tx := int(math.Round(tracer.Position[0]))
 		ty := int(math.Round(tracer.Position[1]))
@@ -121,7 +120,6 @@ func (w *World) Step() {
 
 	var wg sync.WaitGroup
 
-	// ADJUSTED THRESHOLDS: Calibrated to match the mathematical scale of your seeded sine waves
 	const ConstructiveThreshold = 6.5
 	const DestructiveThreshold = -2.0
 
@@ -140,7 +138,7 @@ func (w *World) Step() {
 				for y := 1; y < w.Height-1; y++ {
 					for z := 1; z < w.Depth-1; z++ {
 
-						// --- PASS 1: WAVE INTERFERENCE GEOMETRY ---
+						// --- PASS 1: WAVE INTERFERENCE & SPIN-LOCK TRAPPING ---
 						cell := w.Cells[x][y][z]
 						var netInterference float64 = 0.0
 
@@ -154,16 +152,15 @@ func (w *World) Step() {
 						}
 
 						if netInterference >= ConstructiveThreshold {
-							// Constructive Max: Packets stack and condense into persistent localized matter (+W, Red)
 							nextCells[x][y][z].Fields.V[3] += netInterference * 0.15
-							nextCells[x][y][z].Fields.Amplitude *= 0.2 // Flatten the loose wave packet upon bottling
+							nextCells[x][y][z].Fields.V[0] += netInterference * 0.5
+							nextCells[x][y][z].Fields.Amplitude *= 0.1
 						} else if netInterference <= DestructiveThreshold {
-							// Destructive Max: Reverse Spleef injects baseline units to stabilize the ledger
 							nextCells[x][y][z].Fields.V[3] += 0.5
 							nextCells[x][y][z].Fields.Phase *= 0.5
 						}
 
-						// --- PASS 2: GEOMETRIC SURFACE DISTANCE IMPEDANCE (NATURE'S DRAG) ---
+						// --- PASS 2: GEOMETRIC SURFACE DISTANCE IMPEDANCE & NEIGHBORHOOD ATTRACTION ---
 						mVal := nextCells[x][y][z].Fields.V[3]
 						aVal := nextCells[x][y][z].Fields.V[4]
 
@@ -171,32 +168,54 @@ func (w *World) Step() {
 							continue
 						}
 
-						// Calculate absolute displacement from Surface 0 (W = 0)
 						netCurvature := mVal - aVal
 						distanceFromSurface := math.Abs(netCurvature)
 
-						// Lattice Impedance Factor: The deeper from the surface, the higher the viscous resistance
 						const SpatialRigidityConstant = 0.15
 						dragFactor := 1.0 / (1.0 + (distanceFromSurface * SpatialRigidityConstant))
 
-						// --- NEW: LOCAL NEIGHBORHOOD GRAVITY PULL (Sample 2 voxels out in an envelope) ---
+						// Local Neighborhood Gravity Pull (2-voxel envelope)
 						var pullX, pullY, pullZ float64
-						for dxLocal := -2; dxLocal <= 2; dxLocal++ {
-							for dyLocal := -2; dyLocal <= 2; dyLocal++ {
-								for dzLocal := -2; dzLocal <= 2; dzLocal++ {
+						// NEW: Electrical Twist Acceleration Gradient vectors
+						var elecX, elecY, elecZ float64
+
+						for dxLocal := -3; dxLocal <= 3; dxLocal++ {
+							for dyLocal := -3; dyLocal <= 3; dyLocal++ {
+								for dzLocal := -3; dzLocal <= 3; dzLocal++ {
 									nx, ny, nz := x+dxLocal, y+dyLocal, z+dzLocal
 
-									// Boundary safety optimization
 									if nx >= 0 && nx < w.Width && ny >= 0 && ny < w.Height && nz >= 0 && nz < w.Depth {
-										neighborMass := w.Cells[nx][ny][nz].Fields.V[3]
-										if neighborMass > 0 {
-											distSq := float64(dxLocal*dxLocal + dyLocal*dyLocal + dzLocal*dzLocal)
-											if distSq > 0 {
-												// 1/r^2 inverse square force scaling
-												force := neighborMass / distSq
-												pullX += (float64(dxLocal) / math.Sqrt(distSq)) * force
-												pullY += (float64(dyLocal) / math.Sqrt(distSq)) * force
-												pullZ += (float64(dzLocal) / math.Sqrt(distSq)) * force
+										targetCell := w.Cells[nx][ny][nz]
+										distSq := float64(dxLocal*dxLocal + dyLocal*dyLocal + dzLocal*dzLocal)
+
+										if distSq > 0 {
+											// Mass gravity contribution (up to 2 voxels out)
+											if math.Abs(float64(dxLocal)) <= 2 && math.Abs(float64(dyLocal)) <= 2 && math.Abs(float64(dzLocal)) <= 2 {
+												if targetCell.Fields.V[3] > 0 {
+													force := targetCell.Fields.V[3] / distSq
+													pullX += (float64(dxLocal) / math.Sqrt(distSq)) * force
+													pullY += (float64(dyLocal) / math.Sqrt(distSq)) * force
+													pullZ += (float64(dzLocal) / math.Sqrt(distSq)) * force
+												}
+											}
+
+											// LONG-RANGE ELECTRICAL TWIST contributed up to 3 voxels out
+											neighborTwist := targetCell.Fields.V[1]
+											if neighborTwist != 0 {
+												// Coulomb imitation rule: Opposite charges attract, like charges repel
+												// We multiply active cell twist by neighbor twist to establish orientation
+												chargeInteraction := cell.Fields.V[1] * neighborTwist
+
+												var twistForce float64
+												if chargeInteraction < 0 {
+													twistForce = math.Abs(chargeInteraction) / distSq // Attraction
+												} else {
+													twistForce = -(chargeInteraction) / distSq // Repulsion
+												}
+
+												elecX += (float64(dxLocal) / math.Sqrt(distSq)) * twistForce
+												elecY += (float64(dyLocal) / math.Sqrt(distSq)) * twistForce
+												elecZ += (float64(dzLocal) / math.Sqrt(distSq)) * twistForce
 											}
 										}
 									}
@@ -211,7 +230,6 @@ func (w *World) Step() {
 							nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
 							neigh := w.Cells[nx][ny][nz]
 
-							// Factor local directional gravity pulling into the standard migration weights
 							localPullFactor := 0.0
 							if dx[i] != 0 {
 								localPullFactor = pullX * float64(dx[i])
@@ -223,7 +241,19 @@ func (w *World) Step() {
 								localPullFactor = pullZ * float64(dz[i])
 							}
 
-							mWeights[i] = 1.0 + (neigh.Fields.V[3] * 0.5) - (neigh.Fields.V[4] * 0.2 * w.RepulsionStrength) + (localPullFactor * 0.1)
+							localTwistFactor := 0.0
+							if dx[i] != 0 {
+								localTwistFactor = elecX * float64(dx[i])
+							}
+							if dy[i] != 0 {
+								localTwistFactor = elecY * float64(dy[i])
+							}
+							if dz[i] != 0 {
+								localTwistFactor = elecZ * float64(dz[i])
+							}
+
+							// Merge both mass attraction and electrical gradient changes into fluid weights
+							mWeights[i] = 1.0 + (neigh.Fields.V[3] * 0.5) - (neigh.Fields.V[4] * 0.2 * w.RepulsionStrength) + (localPullFactor * 0.1) + (localTwistFactor * 0.15)
 							if mWeights[i] < 0.001 {
 								mWeights[i] = 0.001
 							}
@@ -245,7 +275,6 @@ func (w *World) Step() {
 							aMigrationRate = w.StickyClumpRate
 						}
 
-						// Apply your custom manifold-distance drag modifier to the fluid transfer execution
 						mOutTotal := mVal * mMigrationRate * dragFactor
 						aOutTotal := aVal * aMigrationRate * dragFactor
 
