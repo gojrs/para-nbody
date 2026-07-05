@@ -224,27 +224,41 @@ func (h *Handler) HandleWaveSweepRequest(c *gin.Context) {
 		world.TwistFollowRate = 0.05
 	}
 
-	// SEED THE BACKGROUND VACUUM WAVES (WITH DUAL CHIRALITY)
-	//midX := world.Width / 2
+	// --- UPGRADED SEEDING: OVERLAPPING DUAL-LAYER TUG-OF-WAR ---
+	// We dismantle the 1D X-axis fence. Space is now initialized by letting two
+	// distinct phase sheets collide and overlap across every single shared voxel coordinate.
 
-	// Divide the lattice along the X-axis into exact thirds to mimic a 2:1 structural footprint
-	twoThirdsX := (world.Width * 2) / 3
+	maxDist := math.Sqrt(float64(world.Width*world.Width + world.Height*world.Height + world.Depth*world.Depth))
 
 	for x := 1; x < world.Width-1; x++ {
 		for y := 1; y < world.Height-1; y++ {
 			for z := 1; z < world.Depth-1; z++ {
+				// Base structural amplitude
 				world.Cells[x][y][z].Fields.Amplitude = 3.5 * math.Sin(float64(x)*0.5)
 
-				// 2/3 of space is seeded for positive Up Quark generations, 1/3 for Down Quarks
-				if x < twoThirdsX {
-					// Left-handed Domain: Positive Twist (Up Quark Bedding)
-					world.Cells[x][y][z].Fields.Phase = float64(y+z) * 0.2
-					world.Cells[x][y][z].Fields.V[1] = 1.0
-				} else {
-					// Right-handed Domain: Negative Twist (Down Quark Bedding)
-					world.Cells[x][y][z].Fields.Phase = float64(y+z) * -0.2
-					world.Cells[x][y][z].Fields.V[1] = -1.0
-				}
+				// Layer A: Distance from the origin corner (0,0,0) -> Positive Pull
+				distOrigin := math.Sqrt(float64(x*x + y*y + z*z))
+				phaseA := distOrigin * 0.2
+				twistA := 1.0
+
+				// Layer B: Distance from the opposite far corner -> Negative Pull
+				dxFar := world.Width - x
+				dyFar := world.Height - y
+				dzFar := world.Depth - z
+				distFar := math.Sqrt(float64(dxFar*dxFar + dyFar*dyFar + dzFar*dzFar))
+				phaseB := distFar * -0.2
+				twistB := -1.0
+
+				// 🪢 The Shared Voxel Intersection: Summing the overlapping fields
+				// This creates the emergent "rope" that your simulation engine will pull on.
+				world.Cells[x][y][z].Fields.Phase = phaseA + phaseB
+
+				// Calculate a normalized spatial weight based on where the voxel sits between the two origins
+				weightA := 1.0 - (distOrigin / maxDist)
+				weightB := 1.0 - (distFar / maxDist)
+
+				// The baseline electrical twist V[1] is the net result of the multi-directional tug-of-war
+				world.Cells[x][y][z].Fields.V[1] = (twistA * weightA) + (twistB * weightB)
 			}
 		}
 	}

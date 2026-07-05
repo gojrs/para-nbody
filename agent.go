@@ -27,18 +27,25 @@ type InventoryResponse struct {
 func main() {
 	sweepUrl := "https://pnbody-api.codethematrix.dev/api/v1/pnbody/wave-sweep"
 
-	// The Agent's hunting parameters
-	currentRelaxation := 0.10
-	twistFollow := 0.05
+	// Start at the upper bound of our discovered stable pocket
+	currentRelaxation := 0.0350
+	lowerBound := 0.0150
+	stepSize := 0.0020
 
-	fmt.Println("🤖 Starting GSON Lab Tuning Agent... Target: Atomic Electron Capture")
+	fmt.Println("🤖 Initializing High-Resolution Telemetry Sweep...")
+	fmt.Println("🎯 Targeting Operational Window: 0.0350 -> 0.0150")
 	fmt.Println("-------------------------------------------------------------------------")
 
-	for iteration := 1; iteration <= 10; iteration++ {
-		fmt.Printf("🏃 Iteration %d | Testing Phase Relaxation Rate: %.4f...\n", iteration, currentRelaxation)
+	iteration := 1
+	for currentRelaxation >= lowerBound {
+		// Maintain a proportional scale for the electrical twist follow-through
+		twistFollow := currentRelaxation * 0.5
+
+		fmt.Printf("🏃 Iteration %2d | Testing Phase Relaxation: %.4f (Twist: %.4f)...\n",
+			iteration, currentRelaxation, twistFollow)
 
 		cfg := SweepConfig{
-			Steps:               1000, // Long run to let chemistry cook
+			Steps:               1000,
 			GridSize:            40,
 			GravitySensitivity:  0.001,
 			BaseMigrationRate:   0.25,
@@ -59,10 +66,8 @@ func main() {
 		json.NewDecoder(resp.Body).Decode(&sweepRes)
 		resp.Body.Close()
 
-		// Allow the memory store on the server a brief window to synchronize states
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(300 * time.Millisecond)
 
-		// Query our custom inventory endpoint to look at the resulting census
 		invUrl := fmt.Sprintf("https://pnbody-api.codethematrix.dev/api/v1/pnbody/%s/inventory", sweepRes.UniverseID)
 		invResp, _ := http.Get(invUrl)
 
@@ -75,20 +80,12 @@ func main() {
 		ups := invData.Metrics["Up Quark (u)"]
 		downs := invData.Metrics["Down Quark (d)"]
 
-		fmt.Printf("   📊 Census Result -> Protons: %d | Electrons: %d | Up Quarks: %d | Down Quarks: %d\n",
+		fmt.Printf("   📊 Census -> P: %d | e-: %d | u: %d | d: %d\n",
 			protons, electrons, ups, downs)
 
-		// 🧠 Agent Logic: If electrons are remaining completely uncaptured or bleeding off too fast,
-		// cool down the vacuum sheet elasticity to slow down the field propagation velocity
-		if electrons > 400 {
-			fmt.Println("   📉 Vacuum is too energetic. Dropping relaxation rate to decelerate wave fronts...")
-			currentRelaxation -= 0.01
-			twistFollow -= 0.003
-		} else {
-			fmt.Println("   🎯 Electron envelope containment shifting! Locking parameter profile.")
-			break
-		}
+		currentRelaxation -= stepSize
+		iteration++
 
-		time.Sleep(1 * time.Second)
+		time.Sleep(500 * time.Millisecond)
 	}
 }
