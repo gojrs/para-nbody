@@ -223,6 +223,10 @@ func (h *Handler) HandleWaveSweepRequest(c *gin.Context) {
 	if world.TwistFollowRate == 0 {
 		world.TwistFollowRate = 0.05
 	}
+	world.KernelRadius = cfg.KernelRadius
+	if world.KernelRadius == 0 {
+		world.KernelRadius = 3
+	}
 
 	// --- UPGRADED SEEDING: OVERLAPPING DUAL-LAYER TUG-OF-WAR ---
 	// We dismantle the 1D X-axis fence. Space is now initialized by letting two
@@ -268,9 +272,13 @@ func (h *Handler) HandleWaveSweepRequest(c *gin.Context) {
 		world.Step()
 	}
 
-	_ = h.WorldManager.UpdateUniverse(universeID, world)
+	// 🧵 OPTIMIZATION: Dispatch database update as an asynchronous background worker.
+	// This prevents slow disk storage I/O or JSON encoding overhead from timing out our API agent!
+	go func(id string, w *engine.World) {
+		_ = h.WorldManager.UpdateUniverse(id, w)
+	}(universeID, world)
 
-	// Audit final matrix status
+	// Audit final matrix status DIRECTLY out of local active RAM to guarantee instant delivery [cite: 86]
 	var totalActive int64 = 0
 	var maxObservedMass float64 = 0.0
 	for x := 0; x < world.Width; x++ {
@@ -287,7 +295,7 @@ func (h *Handler) HandleWaveSweepRequest(c *gin.Context) {
 		}
 	}
 
-	// 🌟 FIX: Return the genuine uuid string under the "universe_id" key
+	// Return the genuine uuid string cleanly without waiting for the disk write to complete [cite: 87]
 	c.JSON(http.StatusOK, gin.H{
 		"universe_id": universeID,
 		"result": gin.H{
@@ -308,15 +316,8 @@ func (h *Handler) GetUniverseInventory(c *gin.Context) {
 
 	cookbook := types.NewParticleCookbook()
 
-	// Initialize inventory tally sheets
-	inventory := map[string]int64{
-		"Hydrogen Proton Core (H+)":      0,
-		"Hydrogen Electron Shell (e-)":   0,
-		"Up Quark (u)":                   0,
-		"Down Quark (d)":                 0,
-		"Electron Neutrino (v_e)":        0,
-		"Unperturbed Vacuum (Surface 0)": 0,
-	}
+	// ✨ Use the shared initialization routine
+	inventory := types.NewEmptyMetrics()
 
 	// Audit the entire 3D voxel grid space
 	for x := 0; x < world.Width; x++ {
@@ -324,16 +325,28 @@ func (h *Handler) GetUniverseInventory(c *gin.Context) {
 			for z := 0; z < world.Depth; z++ {
 				cell := world.Cells[x][y][z]
 
-				// Run the multivector properties against the recipe rules
 				identity := cookbook.IdentifyVoxel(cell.Fields)
 				inventory[identity]++
 			}
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"universe_id": id,
-		"grid_size":   world.Width,
-		"metrics":     inventory,
+	distances := world.CalculateElectronProtonDistances()
+	var avgDist float64 = 0.0
+	if len(distances) > 0 {
+		var total float64
+		for _, d := range distances {
+			total += d
+		}
+		avgDist = total / float64(len(distances))
+	}
+
+	// ✨ Marshal using the exact shared structural contract
+	c.JSON(http.StatusOK, types.InventoryResponse{
+		UniverseID:        id,
+		GridSize:          world.Width,
+		Metrics:           inventory,
+		AverageDistance:   avgDist,
+		ElectronDistances: distances,
 	})
 }

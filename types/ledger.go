@@ -157,9 +157,41 @@ type NBodyConfig struct {
 	StickyClumpRate     float64 `json:"sticky_clump_rate"`     // Cohesive surface tension rate for dense knots
 	PhaseRelaxationRate float64 `json:"phase_relaxation_rate"` // 🌟 Ensure this is here
 	TwistFollowRate     float64 `json:"twist_follow_rate"`
+	KernelRadius        int     `json:"kernel_radius"` // ✨ Added to bind JSON payloads
 }
 
 type NBodyResult struct {
 	FinalCount int64   `json:"final_count"`
 	MaxMass    float64 `json:"max_mass"`
+}
+
+// Strong types for the particle keys to eliminate string typos
+const (
+	KeyProton    = "Hydrogen Proton Core (H+)"
+	KeyElectron  = "Hydrogen Electron Shell (e-)"
+	KeyUpQuark   = "Up Quark (u)"
+	KeyDownQuark = "Down Quark (d)"
+	KeyNeutrino  = "Electron Neutrino (v_e)"
+	KeyVacuum    = "Unperturbed Vacuum (Surface 0)"
+)
+
+// InventoryResponse is the shared contract between your server and agent
+type InventoryResponse struct {
+	UniverseID        string           `json:"universe_id"`
+	GridSize          int              `json:"grid_size"`
+	Metrics           map[string]int64 `json:"metrics"`
+	AverageDistance   float64          `json:"average_distance"`
+	ElectronDistances []float64        `json:"electron_distances,omitempty"`
+}
+
+// NewEmptyMetrics Passively builds a clean, initialized ledger sheet
+func NewEmptyMetrics() map[string]int64 {
+	return map[string]int64{
+		KeyProton:    0,
+		KeyElectron:  0,
+		KeyUpQuark:   0,
+		KeyDownQuark: 0,
+		KeyNeutrino:  0,
+		KeyVacuum:    0,
+	}
 }

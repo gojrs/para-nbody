@@ -22,6 +22,7 @@ type World struct {
 	StickyClumpRate     float64 `json:"sticky_clump_rate"`
 	PhaseRelaxationRate float64 `json:"phase_relaxation_rate"` // 🌟 Parameterized
 	TwistFollowRate     float64 `json:"twist_follow_rate"`     // 🌟 Parameterized
+	KernelRadius        int     `json:"kernel_radius"`
 }
 
 func NewWorld(width, height, depth int) World {
@@ -114,22 +115,25 @@ func (w *World) Step() {
 	dz := [6]int{0, 0, 0, 0, 1, -1}
 
 	// 4. Dispatch Concurrent Spatial Workers
-	// --- UPGRADED PASS 4: DYNAMIC 3D CUBICAL CHUNKING (MINECRAFT ENGINE PATTERN) ---
-	// Instead of thin 1D slices that cause heavy CPU cache thrashing during neighbor lookups,
-	// we partition the 3D grid into distinct sub-cubes. Each CPU core owns its own volume.
 	numCores := runtime.NumCPU()
 
-	// Determine how many chunks we can fit along each axis.
-	// For a 40x40x40 grid, a 3x3x3 layout gives 27 independent spatial volumes.
 	chunksPerAxis := int(math.Ceil(math.Cbrt(float64(numCores))))
 	if chunksPerAxis < 1 {
 		chunksPerAxis = 1
 	}
 
-	// Calculate the integer block dimensions for each chunk
-	chunkDimX := int(math.Ceil(float64(w.Width-2) / float64(chunksPerAxis)))
-	chunkDimY := int(math.Ceil(float64(w.Height-2) / float64(chunksPerAxis)))
-	chunkDimZ := int(math.Ceil(float64(w.Depth-2) / float64(chunksPerAxis)))
+	// 🎯 --- RECONCILED RADIUS EXTRACTION ---
+	// We establish the interaction radius once here so it can safely scale all thread constraints
+	radius := w.KernelRadius
+	if radius == 0 {
+		radius = 3 // Standard baseline fallback
+	}
+	attractionLimit := float64(radius) * (2.0 / 3.0)
+
+	// Threads must stay 'radius' steps away from structural array borders to prevent out-of-bounds reads
+	chunkDimX := int(math.Ceil(float64(w.Width-(radius*2)) / float64(chunksPerAxis)))
+	chunkDimY := int(math.Ceil(float64(w.Height-(radius*2)) / float64(chunksPerAxis)))
+	chunkDimZ := int(math.Ceil(float64(w.Depth-(radius*2)) / float64(chunksPerAxis)))
 
 	var wg sync.WaitGroup
 
@@ -141,26 +145,25 @@ func (w *World) Step() {
 		for cy := 0; cy < chunksPerAxis; cy++ {
 			for cz := 0; cz < chunksPerAxis; cz++ {
 
-				// Calculate the absolute voxel bounding box for this specific chunk
-				startX := 1 + (cx * chunkDimX)
+				// Slide the starting floors outward to match our radius padding requirement
+				startX := radius + (cx * chunkDimX)
 				endX := startX + chunkDimX
-				if endX > w.Width-1 {
-					endX = w.Width - 1
+				if endX > w.Width-radius {
+					endX = w.Width - radius
 				}
 
-				startY := 1 + (cy * chunkDimY)
+				startY := radius + (cy * chunkDimY)
 				endY := startY + chunkDimY
-				if endY > w.Height-1 {
-					endY = w.Height - 1
+				if endY > w.Height-radius {
+					endY = w.Height - radius
 				}
 
-				startZ := 1 + (cz * chunkDimZ)
+				startZ := radius + (cz * chunkDimZ)
 				endZ := startZ + chunkDimZ
-				if endZ > w.Depth-1 {
-					endZ = w.Depth - 1
+				if endZ > w.Depth-radius {
+					endZ = w.Depth - radius
 				}
 
-				// If the bounding box is inverted or empty, skip spawning a thread
 				if startX >= endX || startY >= endY || startZ >= endZ {
 					continue
 				}
@@ -169,6 +172,8 @@ func (w *World) Step() {
 				go func(sX, eX, sY, eY, sZ, eZ int) {
 					defer wg.Done()
 
+					// Loop bounds inside the thread can now use the parent scope's radius
+					// and attractionLimit safely with zero redeclarations!
 					for x := sX; x < eX; x++ {
 						for y := sY; y < eY; y++ {
 							for z := sZ; z < eZ; z++ {
@@ -209,9 +214,10 @@ func (w *World) Step() {
 									var pullX, pullY, pullZ float64
 									var elecX, elecY, elecZ float64
 
-									for dxLocal := -3; dxLocal <= 3; dxLocal++ {
-										for dyLocal := -3; dyLocal <= 3; dyLocal++ {
-											for dzLocal := -3; dzLocal <= 3; dzLocal++ {
+									// Dynamic lookups executing down your scaled radius parameter bounds
+									for dxLocal := -radius; dxLocal <= radius; dxLocal++ {
+										for dyLocal := -radius; dyLocal <= radius; dyLocal++ {
+											for dzLocal := -radius; dzLocal <= radius; dzLocal++ {
 												nx, ny, nz := x+dxLocal, y+dyLocal, z+dzLocal
 
 												if nx >= 0 && nx < w.Width && ny >= 0 && ny < w.Height && nz >= 0 && nz < w.Depth {
@@ -219,7 +225,10 @@ func (w *World) Step() {
 													distSq := float64(dxLocal*dxLocal + dyLocal*dyLocal + dzLocal*dzLocal)
 
 													if distSq > 0 {
-														if math.Abs(float64(dxLocal)) <= 2 && math.Abs(float64(dyLocal)) <= 2 && math.Abs(float64(dzLocal)) <= 2 {
+														// Matter attraction filtering tethered directly to the limit scaling variable
+														if math.Abs(float64(dxLocal)) <= attractionLimit &&
+															math.Abs(float64(dyLocal)) <= attractionLimit &&
+															math.Abs(float64(dzLocal)) <= attractionLimit {
 															if targetCell.Fields.V[3] > 0 {
 																force := targetCell.Fields.V[3] / distSq
 																pullX += (float64(dxLocal) / math.Sqrt(distSq)) * force
@@ -420,4 +429,51 @@ func (w *World) Step() {
 		tracer.Position[1] += tracer.Velocity[1]
 		tracer.Position[2] += tracer.Velocity[2]
 	}
+}
+
+// CalculateElectronProtonDistances finds the minimum 3D distance from every
+// materialized electron voxel to its closest proton core voxel.
+func (w *World) CalculateElectronProtonDistances() []float64 {
+	var protonCoords [][3]int
+	var electronCoords [][3]int
+
+	for x := 1; x < w.Width-1; x++ {
+		for y := 1; y < w.Height-1; y++ {
+			for z := 1; z < w.Depth-1; z++ {
+				mVal := w.Cells[x][y][z].Fields.V[3]
+				aVal := w.Cells[x][y][z].Fields.V[4]
+
+				if mVal > 0 && (mVal-aVal) >= 6.5 {
+					protonCoords = append(protonCoords, [3]int{x, y, z})
+				}
+				// Keep an eye on the electron twist channel threshold
+				if w.Cells[x][y][z].Fields.V[1] < -0.1 {
+					electronCoords = append(electronCoords, [3]int{x, y, z})
+				}
+			}
+		}
+	}
+
+	if len(protonCoords) == 0 || len(electronCoords) == 0 {
+		return []float64{}
+	}
+
+	var minDistances []float64
+
+	for _, eCoord := range electronCoords {
+		closestDist := math.MaxFloat64
+		for _, pCoord := range protonCoords {
+			dx := float64(eCoord[0] - pCoord[0])
+			dy := float64(eCoord[1] - pCoord[1])
+			dz := float64(eCoord[2] - pCoord[2])
+
+			dist := math.Sqrt(dx*dx + dy*dy + dz*dz)
+			if dist < closestDist {
+				closestDist = dist
+			}
+		}
+		minDistances = append(minDistances, closestDist)
+	}
+
+	return minDistances
 }
