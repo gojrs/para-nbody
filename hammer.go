@@ -15,7 +15,7 @@ type APIResponse struct {
 }
 
 func main() {
-	baseUrl := "http://localhost:42069/api/pnbody/"
+	baseUrl := "https://pnbody-api.codethematrix.dev/api/pnbody/"
 	repulsions := []float64{1.0, 10.0, 50.0, 100.0, 250.0, 500.0}
 
 	fmt.Println("🚀 Starting Advanced 3D Cosmic Sweep...")

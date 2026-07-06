@@ -23,8 +23,8 @@ type SweepConfig struct {
 }
 
 func main() {
-	protocol := "http"
-	host := "172.20.192.10:42069"
+	protocol := "https"
+	host := "pnbody-api.codethematrix.dev"
 	sweepUrl := fmt.Sprintf("%s://%s/api/v1/pnbody/wave-sweep", protocol, host)
 
 	// Operational window bounds
