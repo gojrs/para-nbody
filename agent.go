@@ -23,114 +23,112 @@ type SweepConfig struct {
 }
 
 func main() {
-	protocol := "https"
-	host := "pnbody-api.codethematrix.dev"
+	protocol := "http"
+	host := "172.20.192.10:42069"
 	sweepUrl := fmt.Sprintf("%s://%s/api/v1/pnbody/wave-sweep", protocol, host)
 
-	// Operational window bounds
+	// Operational window bounds for phase relaxation
 	currentRelaxation := 0.0350
-	lowerBound := 0.0150
-	stepSize := 0.0020
+	lowerBound := 0.0250 // Slightly narrowed to keep the nested loop runtime safe
+	relaxationStep := 0.0050
 
-	fmt.Println("🤖 Initializing High-Resolution Telemetry Sweep...")
-	fmt.Println("🎯 Targeting Operational Window: 0.0350 -> 0.0150")
-	fmt.Println("-------------------------------------------------------------------------")
+	fmt.Println("🤖 Initializing Automated Horizon Discovery Agent...")
+	fmt.Println("🎯 Scanning Radius Horizons (KR 5 -> 8) across Phase Window...")
+	fmt.Println("---------------------------------------------------------------------------------")
 
 	iteration := 1
 	for currentRelaxation >= lowerBound {
 		twistFollow := currentRelaxation * 0.5
 
-		fmt.Printf("🏃 Iteration %2d | Testing Phase Relaxation: %.4f (Twist: %.4f)...\n",
-			iteration, currentRelaxation, twistFollow)
+		fmt.Printf("\n🌊 [Phase Relaxation: %.4f | Twist: %.4f]\n", currentRelaxation, twistFollow)
+		fmt.Println("---------------------------------------------------------------------------------")
+		fmt.Printf("%-6s | %-12s | %-16s | %-10s | %-18s\n", "KR", "Universe ID", "Engine Mode", "Quarks (u/d)", "Avg Orbit Radius")
+		fmt.Println("---------------------------------------------------------------------------------")
 
-		cfg := SweepConfig{
-			Steps:               1000,
-			GridSize:            40,
-			GravitySensitivity:  0.001,
-			BaseMigrationRate:   0.25,
-			StickyClumpRate:     0.05,
-			PhaseRelaxationRate: currentRelaxation,
-			TwistFollowRate:     twistFollow,
-			KernelRadius:        6, // 🔥 FORCE THE GEOMETRIC EXPANSION 🔥
-		}
+		// 🎯 NESTED RADIUS HORIZON SWEEP
+		// We step from KR=5 up to KR=8 to locate where the orbit size plateaus
+		for testKR := 5; testKR <= 8; testKR++ {
 
-		jsonData, _ := json.Marshal(cfg)
-		resp, err := http.Post(sweepUrl, "application/json", bytes.NewBuffer(jsonData))
-		if err != nil {
-			log.Fatalf("Server connection lost: %v", err)
-		}
+			cfg := SweepConfig{
+				Steps:               1000,
+				GridSize:            42, // 🌟 Explicit code trigger to route into Engine V2 Phase-Space
+				GravitySensitivity:  0.001,
+				BaseMigrationRate:   0.25,
+				StickyClumpRate:     0.05,
+				PhaseRelaxationRate: currentRelaxation,
+				TwistFollowRate:     twistFollow,
+				KernelRadius:        testKR, // Dynamically modifying the horizon bounds
+			}
 
-		// 🎯 Read raw map directly to avoid contract naming friction
-		var sweepRes map[string]interface{}
-		if err := json.NewDecoder(resp.Body).Decode(&sweepRes); err != nil {
-			fmt.Printf("   ❌ JSON Decode Error: %v\n", err)
+			jsonData, _ := json.Marshal(cfg)
+			resp, err := http.Post(sweepUrl, "application/json", bytes.NewBuffer(jsonData))
+			if err != nil {
+				log.Fatalf("Server connection lost: %v", err)
+			}
+
+			var sweepRes map[string]interface{}
+			if err = json.NewDecoder(resp.Body).Decode(&sweepRes); err != nil {
+				resp.Body.Close()
+				continue
+			}
 			resp.Body.Close()
-			currentRelaxation -= stepSize
-			iteration++
-			continue
-		}
-		resp.Body.Close()
 
-		// Extract the string token safely whether the key is "universe_id" or "id"
-		universeID := ""
-		if val, ok := sweepRes["universe_id"]; ok {
-			universeID = fmt.Sprintf("%v", val)
-		} else if val, ok := sweepRes["id"]; ok {
-			universeID = fmt.Sprintf("%v", val)
-		}
+			// Extract string token safely [cite: 26, 27, 28]
+			// Extract string token safely
+			universeID := ""
+			if val, ok := sweepRes["universe_id"]; ok {
+				universeID = fmt.Sprintf("%v", val)
+			} else if val, ok := sweepRes["id"]; ok {
+				universeID = fmt.Sprintf("%v", val) // 🎯 assign the value here!
+			}
 
-		// Guard check against empty identifiers
-		if universeID == "" {
-			fmt.Println("   ⚠️ Server returned a blank ID. Skipping iteration...")
-			currentRelaxation -= stepSize
-			iteration++
-			continue
-		}
+			if universeID == "" {
+				continue
+			}
 
-		time.Sleep(300 * time.Millisecond)
+			// Short pause to allow background async disk tasks to stabilize
+			time.Sleep(200 * time.Millisecond)
 
-		// Formulate the path to query the specific universe metrics ledger
-		invUrl := fmt.Sprintf("%s://%s/api/v1/pnbody/%s/inventory", protocol, host, universeID)
-		invResp, err := http.Get(invUrl)
-		if err != nil {
-			fmt.Printf("   ❌ Inventory Fetch Failed: %v\n", err)
-			currentRelaxation -= stepSize
-			iteration++
-			continue
-		}
+			// Fetch the calculated metrics ledger inventory [cite: 28, 29]
+			invUrl := fmt.Sprintf("%s://%s/api/v1/pnbody/%s/inventory", protocol, host, universeID)
+			invResp, err := http.Get(invUrl)
+			if err != nil {
+				continue
+			}
 
-		var invData types.InventoryResponse
-		if err := json.NewDecoder(invResp.Body).Decode(&invData); err != nil {
-			fmt.Printf("   ❌ Inventory Decode Error: %v\n", err)
+			var invData types.InventoryResponse
+			if err := json.NewDecoder(invResp.Body).Decode(&invData); err != nil {
+				invResp.Body.Close()
+				continue
+			}
 			invResp.Body.Close()
-			currentRelaxation -= stepSize
-			iteration++
-			continue
+
+			// Extract derived telemetry descriptors [cite: 29]
+			ups := invData.Metrics[types.KeyUpQuark]
+			downs := invData.Metrics[types.KeyDownQuark]
+			avgDistance := invData.AverageDistance
+
+			displayID := universeID
+			if len(universeID) >= 8 {
+				displayID = universeID[:8]
+			}
+
+			engineMode := "V2_PHASE_SPACE"
+			if val, ok := sweepRes["engine_mode"]; ok {
+				engineMode = fmt.Sprintf("%v", val)
+			}
+
+			// Print clean row layout for visual delta checking
+			quarkTelemetry := fmt.Sprintf("%d / %d", ups, downs)
+			fmt.Printf("KR=%-2d | %s | %-16s | %-10s | %.4f voxels\n",
+				testKR, displayID, engineMode, quarkTelemetry, avgDistance)
+
+			// Cooling window buffer to keep the pipeline steady
+			time.Sleep(400 * time.Millisecond)
 		}
-		invResp.Body.Close()
 
-		// Extract types from the standardized shared contract
-		protons := invData.Metrics[types.KeyProton]
-		electrons := invData.Metrics[types.KeyElectron]
-		ups := invData.Metrics[types.KeyUpQuark]
-		downs := invData.Metrics[types.KeyDownQuark]
-		avgDistance := invData.AverageDistance
-
-		// Shorten long UUID strings down to 8 characters for terminal scannability
-		displayID := universeID
-		if len(universeID) >= 8 {
-			displayID = universeID[:8]
-		}
-
-		// 📺 TELEMETRY SHOWCASE WINDOW
-		fmt.Printf("   📊 Census -> P: %3d | e-: %3d | u: %3d | d: %3d\n",
-			protons, electrons, ups, downs)
-		fmt.Printf("   🌌 Matrix -> ID: %s | Avg Orbit Radius: %.2f voxels\n",
-			displayID, avgDistance)
-
-		currentRelaxation -= stepSize
+		currentRelaxation -= relaxationStep
 		iteration++
-
-		time.Sleep(500 * time.Millisecond)
+		fmt.Println("---------------------------------------------------------------------------------")
 	}
 }

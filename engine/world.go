@@ -23,6 +23,10 @@ type World struct {
 	PhaseRelaxationRate float64 `json:"phase_relaxation_rate"` // 🌟 Parameterized
 	TwistFollowRate     float64 `json:"twist_follow_rate"`     // 🌟 Parameterized
 	KernelRadius        int     `json:"kernel_radius"`
+	// ✨ --- ENGINE V2 PLANCK RUNTIME FIELDS (DOUBLE BUFFERED) --- ✨
+	IsV2          bool                     `json:"is_v2"`
+	CellsV2       [][][]types.IntegerState `json:"cells_v2"`     // Current Read Buffer
+	CellsV2Buffer [][][]types.IntegerState `json:"cells_v2_buf"` // Next Write Buffer
 }
 
 func NewWorld(width, height, depth int) World {
@@ -71,6 +75,10 @@ func (w *World) CloneCells() [][][]types.LedgerState {
 }
 
 func (w *World) Step() {
+	if w.IsV2 {
+		w.StepV2()
+		return
+	}
 	// 1. Only subtract mass from cells occupied by actual tracers
 	for _, tracer := range w.Tracers {
 		tx := int(math.Round(tracer.Position[0]))
@@ -437,18 +445,39 @@ func (w *World) CalculateElectronProtonDistances() []float64 {
 	var protonCoords [][3]int
 	var electronCoords [][3]int
 
-	for x := 1; x < w.Width-1; x++ {
-		for y := 1; y < w.Height-1; y++ {
-			for z := 1; z < w.Depth-1; z++ {
-				mVal := w.Cells[x][y][z].Fields.V[3]
-				aVal := w.Cells[x][y][z].Fields.V[4]
+	// 🎯 ENGINE V2 COUPLING REGISTER LOOKUP
+	if w.IsV2 {
+		for x := w.KernelRadius; x < w.Width-w.KernelRadius; x++ {
+			for y := w.KernelRadius; y < w.Height-w.KernelRadius; y++ {
+				for z := w.KernelRadius; z < w.Depth-w.KernelRadius; z++ {
+					cell := w.CellsV2[x][y][z]
+					tension := cell.CalculateTension()
+					charge := cell.CalculateCharge()
 
-				if mVal > 0 && (mVal-aVal) >= 6.5 {
-					protonCoords = append(protonCoords, [3]int{x, y, z})
+					// Filter for stable integer clusters
+					if tension >= 12000 && charge > 2000 {
+						protonCoords = append(protonCoords, [3]int{x, y, z})
+					}
+					if charge < -1000 {
+						electronCoords = append(electronCoords, [3]int{x, y, z})
+					}
 				}
-				// Keep an eye on the electron twist channel threshold
-				if w.Cells[x][y][z].Fields.V[1] < -0.1 {
-					electronCoords = append(electronCoords, [3]int{x, y, z})
+			}
+		}
+	} else {
+		// 📜 Legacy Float Fallback Track
+		for x := 1; x < w.Width-1; x++ {
+			for y := 1; y < w.Height-1; y++ {
+				for z := 1; z < w.Depth-1; z++ {
+					mVal := w.Cells[x][y][z].Fields.V[3]
+					aVal := w.Cells[x][y][z].Fields.V[4]
+
+					if mVal > 0 && (mVal-aVal) >= 6.5 {
+						protonCoords = append(protonCoords, [3]int{x, y, z})
+					}
+					if w.Cells[x][y][z].Fields.V[1] < -0.1 {
+						electronCoords = append(electronCoords, [3]int{x, y, z})
+					}
 				}
 			}
 		}
@@ -459,7 +488,6 @@ func (w *World) CalculateElectronProtonDistances() []float64 {
 	}
 
 	var minDistances []float64
-
 	for _, eCoord := range electronCoords {
 		closestDist := math.MaxFloat64
 		for _, pCoord := range protonCoords {

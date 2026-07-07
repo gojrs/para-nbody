@@ -315,16 +315,56 @@ func (h *Handler) GetUniverseInventory(c *gin.Context) {
 	}
 
 	cookbook := types.NewParticleCookbook()
-
-	// ✨ Use the shared initialization routine
 	inventory := types.NewEmptyMetrics()
 
-	// Audit the entire 3D voxel grid space
+	// 🎯 INTERCEPT AND DECODE ENGINE V2 HIGH-SPEED INTEGER ARRAYS
+	if world.IsV2 {
+		for x := 0; x < world.Width; x++ {
+			for y := 0; y < world.Height; y++ {
+				for z := 0; z < world.Depth; z++ {
+					cell := world.CellsV2[x][y][z]
+					tension := cell.CalculateTension()
+					charge := cell.CalculateCharge()
+
+					// Map raw integer phase space stress back into human census categories
+					if tension > 12000 {
+						if charge > 3000 {
+							inventory[types.KeyUpQuark]++
+						} else if charge < -1000 {
+							inventory[types.KeyDownQuark]++
+						}
+					} else {
+						inventory[types.KeyVacuum]++
+					}
+				}
+			}
+		}
+
+		distances := world.CalculateElectronProtonDistances()
+		var avgDist float64 = 0.0
+		if len(distances) > 0 {
+			var total float64
+			for _, d := range distances {
+				total += d
+			}
+			avgDist = total / float64(len(distances))
+		}
+
+		c.JSON(http.StatusOK, types.InventoryResponse{
+			UniverseID:        id,
+			GridSize:          world.Width,
+			Metrics:           inventory,
+			AverageDistance:   avgDist,
+			ElectronDistances: distances,
+		})
+		return
+	}
+
+	// 📜 Fallback to legacy V1 Float auditing loop if not in V2 mode
 	for x := 0; x < world.Width; x++ {
 		for y := 0; y < world.Height; y++ {
 			for z := 0; z < world.Depth; z++ {
 				cell := world.Cells[x][y][z]
-
 				identity := cookbook.IdentifyVoxel(cell.Fields)
 				inventory[identity]++
 			}
@@ -341,7 +381,6 @@ func (h *Handler) GetUniverseInventory(c *gin.Context) {
 		avgDist = total / float64(len(distances))
 	}
 
-	// ✨ Marshal using the exact shared structural contract
 	c.JSON(http.StatusOK, types.InventoryResponse{
 		UniverseID:        id,
 		GridSize:          world.Width,
