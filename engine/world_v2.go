@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"math"
 	"runtime"
 	"sync"
@@ -8,24 +9,55 @@ import (
 	"github.com/gojrs/para-nbody/types"
 )
 
-// InitV2 provisions both high-density integer matrix layouts up front to allow double-buffering
-func (w *World) InitV2() {
-	w.CellsV2 = make([][][]types.IntegerState, w.Width)
-	w.CellsV2Buffer = make([][][]types.IntegerState, w.Width)
-
-	for x := 0; x < w.Width; x++ {
-		w.CellsV2[x] = make([][]types.IntegerState, w.Height)
-		w.CellsV2Buffer[x] = make([][]types.IntegerState, w.Height)
-		for y := 0; y < w.Height; y++ {
-			w.CellsV2[x][y] = make([]types.IntegerState, w.Depth)
-			w.CellsV2Buffer[x][y] = make([]types.IntegerState, w.Depth)
-		}
-	}
+// V2World satisfies the types.V2PlanckUniverse interface completely.
+type V2World struct {
+	ID                  string                `json:"id"`
+	Width               int                   `json:"width"`
+	Height              int                   `json:"height"`
+	Depth               int                   `json:"depth"`
+	KernelRadius        int                   `json:"kernel_radius"`
+	PhaseRelaxationRate float64               `json:"phase_relaxation_rate"`
+	TwistFollowRate     float64               `json:"twist_follow_rate"`
+	Cells               [][][]types.Pixel     `json:"cells"`
+	Buffer              [][][]types.Pixel     `json:"buffer"`
+	SeedingMode         types.NBodyConfigMode `json:"seeding_mode"`
 }
 
-// StepV2 executes the discrete Planck-scale mechanics with zero memory allocations
-func (w *World) StepV2() {
-	// 6 cardinal directional offsets [cite: 67, 68]
+// NewV2World instantiates the high-performance discrete matrix layer.
+func NewV2World(id string, w, h, d, kr int, relaxation, twist float64, mode types.NBodyConfigMode) *V2World {
+	world := &V2World{
+		ID:                  id,
+		Width:               w,
+		Height:              h,
+		Depth:               d,
+		KernelRadius:        kr,
+		PhaseRelaxationRate: relaxation,
+		TwistFollowRate:     twist,
+		Cells:               make([][][]types.Pixel, w),
+		Buffer:              make([][][]types.Pixel, w),
+		SeedingMode:         mode,
+	}
+
+	for x := 0; x < w; x++ {
+		world.Cells[x] = make([][]types.Pixel, h)
+		world.Buffer[x] = make([][]types.Pixel, h)
+		for y := 0; y < h; y++ {
+			world.Cells[x][y] = make([]types.Pixel, d)
+			world.Buffer[x][y] = make([]types.Pixel, d)
+		}
+	}
+	return world
+}
+
+func (w *V2World) GetID() string                  { return w.ID }
+func (w *V2World) GetDimensions() (int, int, int) { return w.Width, w.Height, w.Depth }
+func (w *V2World) ToJSON() ([]byte, error)        { return json.Marshal(w) }
+
+func (w *V2World) GetPixel(x, y, z int) types.Pixel    { return w.Cells[x][y][z] }
+func (w *V2World) SetPixel(x, y, z int, p types.Pixel) { w.Cells[x][y][z] = p }
+
+// Step runs the discrete Alice and Bob mechanics with zero runtime heap allocations.
+func (w *V2World) Step() {
 	dx := [6]int{1, -1, 0, 0, 0, 0}
 	dy := [6]int{0, 0, 1, -1, 0, 0}
 	dz := [6]int{0, 0, 0, 0, 1, -1}
@@ -47,7 +79,9 @@ func (w *World) StepV2() {
 
 	var wg sync.WaitGroup
 
-	// 🧵 Concurrent 3D Partitioning Worker Grid Loop
+	// Clear write buffer up front to avoid artifact ghosting across frames
+	w.clearBuffer(radius)
+
 	for cx := 0; cx < chunksPerAxis; cx++ {
 		for cy := 0; cy < chunksPerAxis; cy++ {
 			for cz := 0; cz < chunksPerAxis; cz++ {
@@ -78,62 +112,80 @@ func (w *World) StepV2() {
 				go func(sX, eX, sY, eY, sZ, eZ int) {
 					defer wg.Done()
 
+					// Initialize operational type domains locally inside core chunk allocations
+					var a types.Alice
+					var b types.Bob
+
 					for x := sX; x < eX; x++ {
 						for y := sY; y < eY; y++ {
 							for z := sZ; z < eZ; z++ {
-								// Read from the persistent active CellsV2 layer
-								cell := w.CellsV2[x][y][z]
-								currentTension := cell.CalculateTension()
+								room := w.Cells[x][y][z]
+								currentTension := room.CalculateTension()
 
-								var pullX, pullY, pullZ int64
+								var aliceExpandX, aliceExpandY, aliceExpandZ int64
+								var bobContractX, bobContractY, bobContractZ int64
 
-								// 🎯 GATHER FIELD GRADIENT FORCE SLOPES
+								// Scan the Kernel Horizon to map density gradients
 								for dxLocal := -radius; dxLocal <= radius; dxLocal++ {
 									for dyLocal := -radius; dyLocal <= radius; dyLocal++ {
 										for dzLocal := -radius; dzLocal <= radius; dzLocal++ {
-
-											target := w.CellsV2[x+dxLocal][y+dyLocal][z+dzLocal]
+											target := w.Cells[x+dxLocal][y+dyLocal][z+dzLocal]
 											distSq := int64(dxLocal*dxLocal + dyLocal*dyLocal + dzLocal*dzLocal)
 
 											if distSq > 0 {
 												targetTension := target.CalculateTension()
+
+												// --- V3 NATURE DUALITY CONSTRAINTS ---
 												gradientForce := (targetTension - currentTension) / distSq
 
-												pullX += int64(dxLocal) * gradientForce
-												pullY += int64(dyLocal) * gradientForce
-												pullZ += int64(dzLocal) * gradientForce
+												// 🔴 ALICE: Seeks lower density zones (Inflationary Expansion) via component domain
+												ax, ay, az := a.Expand(int64(dxLocal), int64(dyLocal), int64(dzLocal), gradientForce)
+												aliceExpandX += ax
+												aliceExpandY += ay
+												aliceExpandZ += az
+
+												// 🔵 BOB: Seeks higher density zones (Gravitational Contraction) via component domain
+												bx, by, bz := b.Contract(int64(dxLocal), int64(dyLocal), int64(dzLocal), gradientForce)
+												bobContractX += bx
+												bobContractY += by
+												bobContractZ += bz
 											}
 										}
 									}
 								}
 
-								// Base structural carry-over from current state directly into the pre-allocated write buffer
-								w.CellsV2Buffer[x][y][z].Momentum[0] = cell.Momentum[0] + pullX
-								w.CellsV2Buffer[x][y][z].Momentum[1] = cell.Momentum[1] + pullY
-								w.CellsV2Buffer[x][y][z].Momentum[2] = cell.Momentum[2] + pullZ
+								// Initialize the destination buffer slice
+								w.Buffer[x][y][z].Destination.X = room.Destination.X + uint64(aliceExpandX+bobContractX)
+								w.Buffer[x][y][z].Destination.Y = room.Destination.Y + uint64(aliceExpandY+bobContractY)
+								w.Buffer[x][y][z].Destination.Z = room.Destination.Z + uint64(aliceExpandZ+bobContractZ)
 
-								// 🍾 THE QUANTUM BOTTLE CONFIGURATION SHIFT
+								// Maintain structural integrity boundaries via direct Pointer targets
 								const PlanckLimit = 12000
-								if currentTension > PlanckLimit {
-									w.CellsV2Buffer[x][y][z].Momentum[0] = (w.CellsV2Buffer[x][y][z].Momentum[0] + w.CellsV2Buffer[x][y][z].Momentum[1]) / 2
-									w.CellsV2Buffer[x][y][z].Momentum[1] = -w.CellsV2Buffer[x][y][z].Momentum[0]
+								if room.Alice != nil {
+									if currentTension > PlanckLimit {
+										w.Buffer[x][y][z].Alice.X = room.Alice.X / 2
+									} else {
+										w.Buffer[x][y][z].Alice.X = room.Alice.X
+									}
 								}
 
-								// 🎯 KINETIC ADVECTION: Push displacements downstream into w.CellsV2Buffer
+								// Apply dampening and shift weights to neighbor pixels
 								const ScalingDampener = 100
-								moveX := w.CellsV2Buffer[x][y][z].Momentum[0] / ScalingDampener
-								moveY := w.CellsV2Buffer[x][y][z].Momentum[1] / ScalingDampener
-								moveZ := w.CellsV2Buffer[x][y][z].Momentum[2] / ScalingDampener
+								moveX := int64(w.Buffer[x][y][z].Destination.X) / ScalingDampener
+								moveY := int64(w.Buffer[x][y][z].Destination.Y) / ScalingDampener
+								moveZ := int64(w.Buffer[x][y][z].Destination.Z) / ScalingDampener
 
 								for i := 0; i < 6; i++ {
 									nx := x + dx[i]
 									ny := y + dy[i]
 									nz := z + dz[i]
 
-									w.CellsV2Buffer[nx][ny][nz].Ax += moveX * int64(dx[i])
-									w.CellsV2Buffer[nx][ny][nz].By += moveY * int64(dy[i])
-									w.CellsV2Buffer[nx][ny][nz].Bx += moveZ * int64(dz[i])
-									w.CellsV2Buffer[nx][ny][nz].By += (moveX * moveY) / (ScalingDampener * 10)
+									// Alice updates now absorb the collective advection pushes natively
+									if w.Buffer[nx][ny][nz].Alice != nil {
+										w.Buffer[nx][ny][nz].Alice.Y += moveX * int64(dx[i])
+										w.Buffer[nx][ny][nz].Alice.X += moveY * int64(dy[i])
+										w.Buffer[nx][ny][nz].Alice.X += moveZ * int64(dz[i])
+									}
 								}
 							}
 						}
@@ -145,6 +197,17 @@ func (w *World) StepV2() {
 
 	wg.Wait()
 
-	// 🏓 THE PING-PONG SWAP: Flip the matrix pointers instantaneously with zero cost
-	w.CellsV2, w.CellsV2Buffer = w.CellsV2Buffer, w.CellsV2
+	// Swap matrix sheets
+	w.Cells, w.Buffer = w.Buffer, w.Cells
+}
+
+func (w *V2World) clearBuffer(radius int) {
+	for x := radius; x < w.Width-radius; x++ {
+		for y := radius; y < w.Height-radius; y++ {
+			for z := radius; z < w.Depth-radius; z++ {
+				// Initialize clean default allocations using our explicit constructor
+				w.Buffer[x][y][z] = types.NewPixel(0, 0, 0, 0, 0)
+			}
+		}
+	}
 }

@@ -1,0 +1,2907 @@
+=== FILE: ./cmd/main.go ===
+package main
+
+import (
+	"context"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/gojrs/para-nbody/engine"
+	"github.com/gojrs/para-nbody/handlers"
+	storage "github.com/gojrs/para-nbody/store"
+)
+
+func main() {
+	storeMode := os.Getenv("PNBODY_STORE")
+
+	var universeStore engine.UniverseStore
+	var err error
+
+	switch storeMode {
+	case "sqlite":
+		dbPath := os.Getenv("PNBODY_DB")
+		if dbPath == "" {
+			dbPath = filepath.Join(".", "dataset", "para-nbody-v2.store")
+		}
+
+		universeStore, err = storage.NewSQLiteStore(dbPath)
+		if err != nil {
+			log.Fatalf("Critical: Could not initialize SQLite store: %v", err)
+		}
+
+		log.Printf("Using SQLite universe store: %s", dbPath)
+
+	default:
+		universeStore = storage.NewTTLStore(30 * time.Minute)
+		log.Println("Using TTL universe store")
+	}
+
+	worldManager := engine.NewWorldManager(universeStore)
+	handler := handlers.NewHandler(worldManager)
+
+	// 2. Setup the Gin Engine
+	router := gin.Default()
+	handler.RegisterRoutes(router)
+
+	// 3. Configure the HTTP Server
+	srv := &http.Server{
+		Addr:    ":42069",
+		Handler: router,
+	}
+
+	// 4. Start the Server in a Goroutine
+	// This prevents the server from blocking the main thread
+	go func() {
+		log.Printf("GSON Systems Lab online at http://localhost%s", srv.Addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Listen error: %s\n", err)
+		}
+	}()
+
+	// 5. SAFE SHUTDOWN MOLE: Listen for interrupt signals
+	quit := make(chan os.Signal, 1)
+	// SIGINT = Ctrl+C, SIGTERM = Kill command
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
+	// Block here until a signal is received
+	// ... existing code ...
+
+	// Block here until a signal is received
+	<-quit
+	log.Println("Shutdown signal received. Closing the GSON Lab...")
+
+	// Create a context with a 10-second timeout for the shutdown process
+	// This gives active simulations time to finish saving to the database
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err = srv.Shutdown(ctx); err != nil {
+		log.Printf("Server forced to shutdown: %v", err)
+	}
+}
+
+
+=== FILE: ./types/ledger.go ===
+package types
+
+type LedgerState struct {
+	Fields Multivector `json:"fields"`
+	Energy float64     `json:"energy"`
+	Commit bool        `json:"commit"`
+}
+
+type Multivector struct {
+	Scalar float64    `json:"scalar"`
+	V      [5]float64 `json:"v"` // [0]:Spin, [1]:Electric, [2]:Magnetic, [3]:Matter (+W), [4]:Antimatter (-W)
+	// --- NEW WAVE GEOMETRY CHANNELS ---
+	Amplitude float64 `json:"amplitude"` // Wave peak height
+	Phase     float64 `json:"phase"`     // Current phase angle in radians (0 to 2*Pi)
+}
+
+func (m Multivector) Add(other Multivector) Multivector {
+	res := Multivector{Scalar: m.Scalar + other.Scalar}
+	for i := 0; i < 5; i++ {
+		res.V[i] = m.V[i] + other.V[i]
+	}
+	return res
+}
+
+func (m Multivector) Scale(factor float64) Multivector {
+	res := Multivector{Scalar: m.Scalar * factor}
+	for i := 0; i < 5; i++ {
+		res.V[i] = m.V[i] * factor
+	}
+	return res
+}
+
+func (m Multivector) Matter() float64 {
+	return m.V[3]
+}
+
+func (m Multivector) Antimatter() float64 {
+	return m.V[4]
+}
+
+func (m Multivector) NetCurvature() float64 {
+	return m.V[3] - m.V[4]
+}
+
+// ---- GEOMETRIC COOKBOOK REGISTRY ----
+
+// SpatialArchitecture represents the pure geometric requirements for a state
+type SpatialArchitecture struct {
+	MinCompression float64 // Depth into the +W side
+	RequiredTwist  float64 // Electrical phase alignment on the V axis
+}
+
+// HumanLabel is our interface translation layer
+type HumanLabel interface {
+	HumanName() string
+	CheckGeometry(mv Multivector) bool
+}
+
+// ProtonClass satisfies the HumanLabel interface via implicit composition
+type ProtonClass struct {
+	Architecture SpatialArchitecture
+}
+
+func NewProtonClass() ProtonClass {
+	return ProtonClass{
+		Architecture: SpatialArchitecture{
+			MinCompression: 50.0,
+			RequiredTwist:  1.0,
+		},
+	}
+}
+
+func (p ProtonClass) HumanName() string {
+	return "Hydrogen Proton Core (H+)"
+}
+
+func (p ProtonClass) CheckGeometry(mv Multivector) bool {
+	// Translates our human label to raw geometric validation
+	return mv.V[3] >= p.Architecture.MinCompression && mv.V[1] >= p.Architecture.RequiredTwist
+}
+
+// ElectronClass satisfies the HumanLabel interface
+type ElectronClass struct {
+	Architecture SpatialArchitecture
+}
+
+func NewElectronClass() ElectronClass {
+	return ElectronClass{
+		Architecture: SpatialArchitecture{
+			MinCompression: 0.1,  // Extremely light spatial compression depth
+			RequiredTwist:  -1.0, // Negative orthogonal phase twist (opposite of Proton)
+		},
+	}
+}
+
+func (e ElectronClass) HumanName() string {
+	return "Hydrogen Electron Shell (e-)"
+}
+
+func (e ElectronClass) CheckGeometry(mv Multivector) bool {
+	// Validates if a coordinate voxel matches the geometric footprint of an electron
+	// It must have a minimum baseline presence, but its Lattice Twist must be deeply negative
+	return mv.V[3] >= e.Architecture.MinCompression && mv.V[1] <= e.Architecture.RequiredTwist
+}
+
+type ParticleCookbook struct {
+	Decoders []HumanLabel
+}
+
+func NewParticleCookbook() *ParticleCookbook {
+	return &ParticleCookbook{
+		Decoders: []HumanLabel{
+			NewProtonClass(),
+			NewElectronClass(),
+			UpQuarkClass{},   // 🌟 Registered from fundamental_recipes.go
+			DownQuarkClass{}, // 🌟 Registered from fundamental_recipes.go
+			NeutrinoClass{},  // 🌟 Registered from fundamental_recipes.go
+		},
+	}
+}
+
+// IdentifyVoxel checks the raw geometry against the cookbook recipes
+func (cb *ParticleCookbook) IdentifyVoxel(mv Multivector) string {
+	for _, decoder := range cb.Decoders {
+		if decoder.CheckGeometry(mv) {
+			return decoder.HumanName()
+		}
+	}
+	return "Unperturbed Vacuum (Surface 0)"
+}
+
+// TracerBody represents a continuous "bottled" unit traveling through the discrete grid.
+type TracerBody struct {
+	ID       string     `json:"id"`
+	IsMatter bool       `json:"is_matter"` // True = Matter (+W tier), False = Antimatter (-W tier)
+	Position [3]float64 `json:"position"`  // Continuous X, Y, Z coordinates
+	Velocity [3]float64 `json:"velocity"`  // Smooth motion vector
+	BaseMass float64    `json:"base_mass"` // Intrinsic mass payload
+}
+
+type NBodyConfigMode uint8
+
+const (
+	SeedingModeStandard NBodyConfigMode = iota
+	SeedingModeChaos
+	SeedingModeSplit
+	SeedingModeParity
+)
+
+func (nbcm NBodyConfigMode) String() string {
+	answer := ""
+
+	switch nbcm {
+	case SeedingModeStandard:
+		answer = "INVARIANT_CORE"
+	case SeedingModeChaos:
+		answer = "QUANTUM_CHAOS"
+	case SeedingModeSplit:
+		answer = "PHASE_SPLIT"
+	case SeedingModeParity:
+		answer = "EVEN_PARITY"
+	}
+
+	return answer
+}
+
+//// UnmarshalJSON lets Gin automatically map strings like "PHASE_SPLIT" to the enum value!
+//func (nbcm *NBodyConfigMode) UnmarshalJSON(b []byte) error {
+//	// Strip quotation marks from the raw JSON string bytes
+//	str := string(bytes.Trim(b, `"`))
+//
+//	switch str {
+//	case "INVARIANT_CORE", "0":
+//		*nbcm = SeedingModeStandard
+//	case "QUANTUM_CHAOS", "1":
+//		*nbcm = SeedingModeChaos
+//	case "PHASE_SPLIT", "2":
+//		*nbcm = SeedingModeSplit
+//	case "EVEN_PARITY", "3":
+//		*nbcm = SeedingModeParity
+//	default:
+//		return fmt.Errorf("invalid seeding mode: %s", str)
+//	}
+//	return nil
+//}
+
+//// MarshalJSON makes sure when you output this config, it writes out the readable text string
+//func (nbcm NBodyConfigMode) MarshalJSON() ([]byte, error) {
+//	return []byte(fmt.Sprintf(`"%s"`, nbcm.String())), nil
+//}
+
+type NBodyConfig struct {
+	N                           NBodyConfigMode `json:"n"`
+	BoxSize                     float64         `json:"box_size"`
+	MaxSpeed                    float64         `json:"max_speed"`
+	Steps                       int             `json:"steps"`
+	ParticleMass                float64         `json:"particle_mass"`
+	UnlikeMassRepulsionStrength float64         `json:"unlike_mass_repulsion_strength"`
+
+	// --- NEW COSMIC AUTOMATION PARAMETERS ---
+	GridSize            int     `json:"grid_size"`             // Dynamic spatial resolution (e.g., 30, 40, 50)
+	SunMass             float64 `json:"sun_mass"`              // Central anchor mass allocation
+	MercuryMass         float64 `json:"mercury_mass"`          // Tracer mass allocation
+	MercuryVelocityZ    float64 `json:"mercury_velocity_z"`    // Tangential speed kick
+	MercuryIsMatter     bool    `json:"mercury_is_matter"`     // Structural field sign flag (True/False)
+	GravitySensitivity  float64 `json:"gravity_sensitivity"`   // Weak force constant (The G-scaling lever)
+	BaseMigrationRate   float64 `json:"base_migration_rate"`   // Fluid bleed rate (Normal vacuum diffusion)
+	StickyClumpRate     float64 `json:"sticky_clump_rate"`     // Cohesive surface tension rate for dense knots
+	PhaseRelaxationRate float64 `json:"phase_relaxation_rate"` // 🌟 Ensure this is here
+	TwistFollowRate     float64 `json:"twist_follow_rate"`
+	KernelRadius        int     `json:"kernel_radius"` // ✨ Added to bind JSON payloads
+}
+
+type NBodyResult struct {
+	FinalCount int64   `json:"final_count"`
+	MaxMass    float64 `json:"max_mass"`
+}
+
+// Strong types for the particle keys to eliminate string typos
+const (
+	KeyProton    = "Hydrogen Proton Core (H+)"
+	KeyElectron  = "Hydrogen Electron Shell (e-)"
+	KeyUpQuark   = "Up Quark (u)"
+	KeyDownQuark = "Down Quark (d)"
+	KeyNeutrino  = "Electron Neutrino (v_e)"
+	KeyVacuum    = "Unperturbed Vacuum (Surface 0)"
+)
+
+// InventoryResponse is the shared contract between your server and agent
+type InventoryResponse struct {
+	UniverseID        string           `json:"universe_id"`
+	GridSize          int              `json:"grid_size"`
+	Metrics           map[string]int64 `json:"metrics"`
+	AverageDistance   float64          `json:"average_distance"`
+	ElectronDistances []float64        `json:"electron_distances,omitempty"`
+}
+
+// NewEmptyMetrics Passively builds a clean, initialized ledger sheet
+func NewEmptyMetrics() map[string]int64 {
+	return map[string]int64{
+		KeyProton:    0,
+		KeyElectron:  0,
+		KeyUpQuark:   0,
+		KeyDownQuark: 0,
+		KeyNeutrino:  0,
+		KeyVacuum:    0,
+	}
+}
+
+
+=== FILE: ./types/reports.go ===
+package types
+
+// PatternProfile tracks the lifetime, location, and internal metrics of a single coherent wave-knot.
+type PatternProfile struct {
+	ID         string  `json:"id"`
+	FirstSeen  int64   `json:"first_seen"`
+	LastSeen   int64   `json:"last_seen"`
+	Population int64   `json:"population"`
+	AvgRadius  float64 `json:"avg_radius"`
+	AvgState   float64 `json:"avg_state"`
+	MaxState   float64 `json:"max_state"`
+	CenterX    float64 `json:"center_x"`
+	CenterY    float64 `json:"center_y"`
+	CenterZ    float64 `json:"center_z"`
+}
+
+// SpectrumReport represents the global matrix summary for a specific timeline step.
+type SpectrumReport struct {
+	NumSteps       int64            `json:"num_steps"`
+	OccupiedCells  int64            `json:"occupied_cells"`
+	AvgRadius      float64          `json:"avg_radius"`
+	AvgState       float64          `json:"avg_state"`
+	MaxState       float64          `json:"max_state"`
+	PatternCount   int64            `json:"pattern_count"`
+	LargestPattern int64            `json:"largest_pattern"`
+	ActivePatterns []PatternProfile `json:"active_patterns"`
+}
+
+
+=== FILE: ./types/recipes.go ===
+package types
+
+import "math"
+
+// GeometricRecipe defines the "shopping list" of spatial dimensions
+// required to cook or stabilize a specific sub-atomic particle architecture.
+type GeometricRecipe struct {
+	Name               string
+	TargetCompression  float64 // Minimum +W or -W depth required
+	RequiredTwistPhase float64 // The electrical orientation on the orthogonal axis
+	RequiredSpin       float64 // Intrinsic angular matrix rotation
+}
+
+// ParticleClass defines the interface for how a bottled knot interacts with the world
+type ParticleClass interface {
+	GetName() string
+	EvaluateStability(currentCurvature float64, localTwist float64) bool
+}
+
+// Proton Configuration
+type Proton struct {
+	BaseMass float64
+	Charge   float64 // +1 Human Label
+}
+
+func (p Proton) GetName() string { return "Proton Core" }
+
+func (p Proton) EvaluateStability(wDepth float64, vTwist float64) bool {
+	// A Proton is stable only if it maintains a deep compression valley
+	// AND a positive orthogonal twist phase
+	return wDepth > 50.0 && vTwist > 0.5
+}
+
+// Electron Configuration
+type Electron struct {
+	BaseMass float64
+	Charge   float64 // -1 Human Label
+}
+
+func (e Electron) GetName() string { return "Electron Shell Envelope" }
+func (e Electron) EvaluateStability(wDepth float64, vTwist float64) bool {
+	// An Electron has low compression depth but a highly agile negative twist phase
+	return wDepth > 0.1 && vTwist < -0.5
+}
+
+// --- ENGINE V2: PHASE-SPACE PLANCK SCALE ARCHITECTURE ---
+
+// IntegerState represents the 4-coordinate integer phase space layout
+type IntegerState struct {
+	Ax int64 `json:"ax"` // Field A, Axis X
+	Ay int64 `json:"ay"` // Field A, Axis Y
+	Bx int64 `json:"bx"` // Field B, Axis X
+	By int64 `json:"by"` // Field B, Axis Y
+
+	// 🏃 The 3D Momentum Vector (The wave-packet ripple)
+	Momentum [3]int64 `json:"momentum"`
+}
+
+// CalculateTension derives the collective "drag" or scalar tension from the origin (0,0)
+func (s IntegerState) CalculateTension() int64 {
+	// Pythagorean hypotenuse across your 4 core dimensions
+	sqSum := float64(s.Ax*s.Ax + s.Ay*s.Ay + s.Bx*s.Bx + s.By*s.By)
+	return int64(math.Sqrt(sqSum))
+}
+
+// CalculateCharge extracts the net horizontal phase twist across the planes
+func (s IntegerState) CalculateCharge() int64 {
+	return s.Ay - s.By
+}
+
+
+=== FILE: ./types/universe.go ===
+package types
+
+// Universe is the master interface defining how the server handlers,
+// automation agents, and database stores interact with a running reality.
+type Universe interface {
+	GetID() string
+	GetDimensions() (int, int, int)
+	Step()                   // Increments the master clock cycle by 1 tick
+	ToJSON() ([]byte, error) // Serializes the entire world space for disk storage
+	GenerateInventory(step int64) SpectrumReport
+}
+
+// V1WaveUniverse exposes the unique capabilities of your legacy float-field matrix.
+type V1WaveUniverse interface {
+	Universe
+	HydratePillar(x, y, z int, recipe Multivector)
+	CalculateElectronProtonDistances() []float64
+}
+
+// V2PlanckUniverse exposes the clean, discrete value assignments of your new entity framework.
+type V2PlanckUniverse interface {
+	Universe
+	GetPixel(x, y, z int) Pixel
+	SetPixel(x, y, z int, p Pixel)
+}
+
+
+=== FILE: ./types/pixel.go ===
+package types
+
+type Pos struct {
+	X int64 `json:"x"`
+	Y int64 `json:"y"`
+}
+
+type SharedState struct {
+	X uint64 `json:"x"`
+	Y uint64 `json:"y"`
+	Z uint64 `json:"z"`
+}
+
+type Pixel struct {
+	Alice       Pos         `json:"alice"`       // Actor A internal state
+	Bob         Pos         `json:"bob"`         // Actor B internal state
+	Destination SharedState `json:"destination"` // Active routing vector for the next step
+}
+
+
+=== FILE: ./types/fundamental_recipes.go ===
+package types
+
+import "math"
+
+// UpQuarkClass represents a fractional, high-compression twist configuration
+type UpQuarkClass struct{}
+
+func (u UpQuarkClass) HumanName() string { return "Up Quark (u)" }
+func (u UpQuarkClass) CheckGeometry(mv Multivector) bool {
+	// High compression depth, positive electrical lattice twist
+	return mv.V[3] > 15.0 && mv.V[1] > 0.3
+}
+
+// DownQuarkClass represents the opposite fractional twist configuration
+type DownQuarkClass struct{}
+
+func (u DownQuarkClass) HumanName() string { return "Down Quark (d)" }
+func (u DownQuarkClass) CheckGeometry(mv Multivector) bool {
+	// High compression depth, light negative electrical lattice twist
+	return mv.V[3] > 15.0 && mv.V[1] < -0.1 && mv.V[1] > -0.4
+}
+
+// NeutrinoClass represents the Off-Surface Neutrality State
+type NeutrinoClass struct{}
+
+func (n NeutrinoClass) HumanName() string { return "Electron Neutrino (v_e)" }
+func (n NeutrinoClass) CheckGeometry(mv Multivector) bool {
+	netCurvature := mv.V[3] - mv.V[4] // Net W displacement
+	totalEnergy := mv.V[3] + mv.V[4]  // Total physical payload presence
+
+	// It is neutral (Net Curvature is close to 0) AND it is off the surface (Total Energy exists)
+	return math.Abs(netCurvature) < 0.01 && totalEnergy > 1.0 && math.Abs(mv.V[1]) < 0.05
+}
+
+
+=== FILE: ./pnbody/engine.go ===
+package pnbody
+
+
+=== FILE: ./pnbody/base.go ===
+package pnbody
+
+
+=== FILE: ./scripts/agent2.go ===
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"time"
+
+	"github.com/gojrs/para-nbody/types"
+)
+
+type SweepConfig struct {
+	Steps               int     `json:"steps"`
+	GridSize            int     `json:"grid_size"`
+	GravitySensitivity  float64 `json:"gravity_sensitivity"`
+	BaseMigrationRate   float64 `json:"base_migration_rate"`
+	StickyClumpRate     float64 `json:"sticky_clump_rate"`
+	PhaseRelaxationRate float64 `json:"phase_relaxation_rate"`
+	TwistFollowRate     float64 `json:"twist_follow_rate"`
+	KernelRadius        int     `json:"kernel_radius"`
+}
+
+func main() {
+	protocol := "http"            // Direct local network protocol profile bypassing reverse proxies
+	host := "172.20.192.10:42069" // Pointed straight to your Proxmox network address
+	sweepUrl := fmt.Sprintf("%s://%s/api/v1/pnbody/wave-sweep", protocol, host)
+
+	// Operational window bounds for phase relaxation
+	currentRelaxation := 0.0350
+	lowerBound := 0.0250
+	relaxationStep := 0.0050
+
+	fmt.Println("🤖 Initializing Deep Horizon Spectrum Audit...")
+	fmt.Println("🎯 Automated Volumetric Sweep: KR 1 -> 10 Sequential Scan")
+	fmt.Println("---------------------------------------------------------------------------------")
+
+	for currentRelaxation >= lowerBound {
+		twistFollow := currentRelaxation * 0.5
+
+		fmt.Printf("\n🌊 [Phase Relaxation: %.4f | Twist: %.4f]\n", currentRelaxation, twistFollow)
+		fmt.Println("---------------------------------------------------------------------------------")
+		fmt.Printf("%-6s | %-12s | %-16s | %-10s | %-18s\n", "KR", "Universe ID", "Engine Mode", "Quarks (u/d)", "Avg Orbit Radius")
+		fmt.Println("---------------------------------------------------------------------------------")
+
+		// 🎯 THE FULL RADIAL SPECTRUM LOOP: 1 to 10
+		for testKR := 1; testKR <= 10; testKR++ {
+
+			cfg := SweepConfig{
+				Steps:               1000,
+				GridSize:            42, // Trigger for Engine V2 Phase-Space paths
+				GravitySensitivity:  0.001,
+				BaseMigrationRate:   0.25,
+				StickyClumpRate:     0.05,
+				PhaseRelaxationRate: currentRelaxation,
+				TwistFollowRate:     twistFollow,
+				KernelRadius:        testKR, // Dynamically stepping across the spectrum
+			}
+
+			jsonData, _ := json.Marshal(cfg)
+			resp, err := http.Post(sweepUrl, "application/json", bytes.NewBuffer(jsonData))
+			if err != nil {
+				log.Fatalf("Server connection lost on KR=%d: %v", testKR, err)
+			}
+
+			var sweepRes map[string]interface{}
+			if err = json.NewDecoder(resp.Body).Decode(&sweepRes); err != nil {
+				resp.Body.Close()
+				continue
+			}
+			resp.Body.Close()
+
+			universeID := ""
+			if val, ok := sweepRes["universe_id"]; ok {
+				universeID = fmt.Sprintf("%v", val)
+			} else if val, ok := sweepRes["id"]; ok {
+				universeID = fmt.Sprintf("%v", val)
+			}
+
+			if universeID == "" {
+				continue
+			}
+
+			// Buffer padding to let asynchronous background updates settle completely
+			time.Sleep(500 * time.Millisecond)
+
+			// Fetch the telemetry metrics ledger inventory
+			invUrl := fmt.Sprintf("%s://%s/api/v1/pnbody/%s/inventory", protocol, host, universeID)
+			invResp, err := http.Get(invUrl)
+			if err != nil {
+				continue
+			}
+
+			var invData types.InventoryResponse
+			if err := json.NewDecoder(invResp.Body).Decode(&invData); err != nil {
+				invResp.Body.Close()
+				continue
+			}
+			invResp.Body.Close()
+
+			ups := invData.Metrics[types.KeyUpQuark]
+			downs := invData.Metrics[types.KeyDownQuark]
+			avgDistance := invData.AverageDistance
+
+			displayID := universeID
+			if len(universeID) >= 8 {
+				displayID = universeID[:8]
+			}
+
+			engineMode := "V2_PHASE_SPACE"
+			if val, ok := sweepRes["engine_mode"]; ok {
+				engineMode = fmt.Sprintf("%v", val)
+			}
+
+			quarkTelemetry := fmt.Sprintf("%d / %d", ups, downs)
+			fmt.Printf("KR=%-2d | %s | %-16s | %-10s | %.4f voxels\n",
+				testKR, displayID, engineMode, quarkTelemetry, avgDistance)
+
+			// Steady cooling pause between massive runs
+			time.Sleep(500 * time.Millisecond)
+		}
+
+		currentRelaxation -= relaxationStep
+		fmt.Println("---------------------------------------------------------------------------------")
+	}
+}
+
+
+=== FILE: ./scripts/hammer.go ===
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+
+	"github.com/gojrs/para-nbody/types"
+)
+
+type APIResponse struct {
+	ID     int64             `json:"id"`
+	Result types.NBodyResult `json:"result"`
+}
+
+func main() {
+	baseUrl := "https://pnbody-api.codethematrix.dev/api/pnbody/"
+	repulsions := []float64{1.0, 10.0, 50.0, 100.0, 250.0, 500.0}
+
+	fmt.Println("🚀 Starting Advanced 3D Cosmic Sweep...")
+	fmt.Println("-------------------------------------------------------------------------------------------------------")
+	fmt.Printf("%-10s | %-6s | %-12s | %-14s | %-15s | %-15s\n",
+		"Repulsion", "ID", "Total Active", "Max Peak Mass", "Matter Pockets", "Antimatter Voids")
+	fmt.Println("-------------------------------------------------------------------------------------------------------")
+
+	for _, r := range repulsions {
+		cfg := types.NBodyConfig{
+			N:                           500,
+			BoxSize:                     1000.0,
+			MaxSpeed:                    2.0,
+			Steps:                       500,
+			ParticleMass:                1.0,
+			UnlikeMassRepulsionStrength: r,
+		}
+
+		jsonData, _ := json.Marshal(cfg)
+		resp, err := http.Post(baseUrl, "application/json", bytes.NewBuffer(jsonData))
+		if err != nil {
+			fmt.Printf("❌ Strength %5.1f: Server Offline\n", r)
+			continue
+		}
+
+		var apiRes struct {
+			ID     int64 `json:"id"`
+			Result struct {
+				FinalCount      int64   `json:"final_count"`
+				MaxMass         float64 `json:"max_mass"`
+				MatterPockets   int64   `json:"matter_pockets"`
+				AntimatterVoids int64   `json:"antimatter_voids"`
+			} `json:"result"`
+		}
+
+		if err := json.NewDecoder(resp.Body).Decode(&apiRes); err != nil {
+			fmt.Printf("❌ Strength %.1f: Decode Error: %v\n", r, err)
+			resp.Body.Close()
+			continue
+		}
+		resp.Body.Close()
+
+		fmt.Printf("⚡ %8.1f | %3d  | %12d | %14.2f | %15d | %15d\n",
+			r, apiRes.ID, apiRes.Result.FinalCount, apiRes.Result.MaxMass,
+			apiRes.Result.MatterPockets, apiRes.Result.AntimatterVoids)
+	}
+}
+
+
+=== FILE: ./scripts/agent_deep_kr1.go ===
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"time"
+
+	"github.com/gojrs/para-nbody/types"
+)
+
+type SweepConfig struct {
+	Steps               int     `json:"steps"`
+	GridSize            int     `json:"grid_size"`
+	GravitySensitivity  float64 `json:"gravity_sensitivity"`
+	BaseMigrationRate   float64 `json:"base_migration_rate"`
+	StickyClumpRate     float64 `json:"sticky_clump_rate"`
+	PhaseRelaxationRate float64 `json:"phase_relaxation_rate"`
+	TwistFollowRate     float64 `json:"twist_follow_rate"`
+	KernelRadius        int     `json:"kernel_radius"`
+}
+
+func main() {
+	protocol := "http"
+	host := "172.20.192.10:42069" // Pointed directly to your local network node
+	baseURL := fmt.Sprintf("%s://%s/api/v1/pnbody", protocol, host)
+
+	fmt.Println("🤖 Initializing Continuous Timeline Evolution Agent...")
+	fmt.Println("🔬 Tracking a single KR=1 universe across an extended lifespan...")
+	fmt.Println("---------------------------------------------------------------------------------")
+	fmt.Printf("%-12s | %-12s | %-18s\n", "Total Steps", "Quarks (u/d)", "Avg Orbit Radius")
+	fmt.Println("---------------------------------------------------------------------------------")
+
+	// 1. SPIKE THE INITIAL UNIVERSE (Baseline 1,000 Steps)
+	cfg := SweepConfig{
+		Steps:               1000,
+		GridSize:            42, // V2 integer routing flag
+		GravitySensitivity:  0.001,
+		BaseMigrationRate:   0.25,
+		StickyClumpRate:     0.05,
+		PhaseRelaxationRate: 0.0300,
+		TwistFollowRate:     0.0150,
+		KernelRadius:        1, // Hard-locked to local face-to-face metric
+	}
+
+	jsonData, _ := json.Marshal(cfg)
+	resp, err := http.Post(baseURL+"/wave-sweep", "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Fatalf("Initialization failed: %v", err)
+	}
+
+	var sweepRes map[string]interface{}
+	_ = json.NewDecoder(resp.Body).Decode(&sweepRes)
+	resp.Body.Close()
+
+	universeID := ""
+	if val, ok := sweepRes["universe_id"]; ok {
+		universeID = fmt.Sprintf("%v", val)
+	} else if val, ok := sweepRes["id"]; ok {
+		universeID = fmt.Sprintf("%v", val)
+	}
+
+	if universeID == "" {
+		log.Fatalf("Failed to retrieve Universe ID from server")
+	}
+
+	// Brief pause to allow background async disk routines to finalize
+	time.Sleep(500 * time.Millisecond)
+
+	// Fetch baseline inventory (1,000 steps)
+	printTelemetryRow(baseURL, universeID, 1000)
+
+	// 2. TIMELINE INCREMENT LOOP (Evolve the same world step-by-step)
+	totalAccumulatedSteps := 1000
+	stepsPerIncrement := 500
+	maxTargetSteps := 4000
+
+	for totalAccumulatedSteps < maxTargetSteps {
+		// Hit the query run endpoint: POST /api/v1/pnbody/:id/run?count=500
+		runUrl := fmt.Sprintf("%s/%s/run?count=%d", baseURL, universeID, stepsPerIncrement)
+		runResp, err := http.Post(runUrl, "application/json", nil)
+		if err != nil {
+			log.Fatalf("\n❌ Server disconnected during evolution loop: %v", err)
+		}
+		runResp.Body.Close()
+
+		totalAccumulatedSteps += stepsPerIncrement
+
+		// Short pause for database flushing stability
+		time.Sleep(500 * time.Millisecond)
+
+		// Audit the live changes to the exact same universe ID
+		printTelemetryRow(baseURL, universeID, totalAccumulatedSteps)
+	}
+	fmt.Println("---------------------------------------------------------------------------------")
+}
+
+func printTelemetryRow(baseURL, universeID string, stepCount int) {
+	invResp, err := http.Get(fmt.Sprintf("%s/%s/inventory", baseURL, universeID))
+	if err != nil {
+		return
+	}
+	defer invResp.Body.Close()
+
+	var invData types.InventoryResponse
+	if err := json.NewDecoder(invResp.Body).Decode(&invData); err != nil {
+		return
+	}
+
+	ups := invData.Metrics[types.KeyUpQuark]
+	downs := invData.Metrics[types.KeyDownQuark]
+	avgDistance := invData.AverageDistance
+
+	quarkTelemetry := fmt.Sprintf("%d / %d", ups, downs)
+	fmt.Printf("Steps=%-5d | %-12s | %.4f voxels\n",
+		stepCount, quarkTelemetry, avgDistance)
+}
+
+
+=== FILE: ./scripts/sweep.go ===
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+
+	"github.com/gojrs/para-nbody/types"
+)
+
+func main() {
+	baseURL := "https://pnbody-api.codethematrix.dev/api/v1/pnbody"
+	// UPGRADED TO LIVE SECURE HTTPS ENDPOINT
+	targetUrl := fmt.Sprintf("%s/wave-sweep", baseURL)
+
+	gravities := []float64{0.001, 0.02}
+	repulsions := []float64{10.0, 500.0}
+
+	fmt.Println("🤖 Initializing Automated HTTPS Wave-Interference Sweep...")
+	fmt.Println("----------------------------------------------------------------------------------------------------")
+	fmt.Printf("%-10s | %-10s | %-15s | %-13s | %-40s\n",
+		"Gravity G", "Repulsion", "Condensed Cells", "Max Peak Mass", "Inventory Telemetry URL")
+	fmt.Println("----------------------------------------------------------------------------------------------------")
+
+	for _, g := range gravities {
+		for _, r := range repulsions {
+
+			cfg := types.NBodyConfig{
+				Steps:                       150, // Evolution ticks
+				GridSize:                    40,
+				GravitySensitivity:          g,
+				UnlikeMassRepulsionStrength: r,
+				BaseMigrationRate:           0.25,
+				StickyClumpRate:             0.05,
+			}
+
+			jsonData, _ := json.Marshal(cfg)
+
+			resp, err := http.Post(targetUrl, "application/json", bytes.NewBuffer(jsonData))
+			if err != nil {
+				fmt.Printf("❌ Connection Failed to SSL Endpoint: %v\n", err)
+				continue
+			}
+
+			// Capture the top-level "id" (the universe_id string) along with results
+			var apiRes struct {
+				ID     string `json:"universe_id"` // 🌟 Added to catch the raw creation ID from Gin
+				Result struct {
+					FinalCount    int64   `json:"final_count"`
+					MaxMass       float64 `json:"max_mass"`
+					MatterPockets int64   `json:"matter_pockets"`
+				} `json:"result"`
+			}
+
+			if err = json.NewDecoder(resp.Body).Decode(&apiRes); err != nil {
+				resp.Body.Close()
+				continue
+			}
+			resp.Body.Close()
+
+			// Print the clean table row with a direct copy-pasteable link to your Proxmox API instance
+			inventoryUrl := fmt.Sprintf("%s/%s/inventory", baseURL, apiRes.ID)
+			fmt.Printf("⚡ %8.3f | %9.1f | %15d | %13.2f | %-40s\n",
+				g, r, apiRes.Result.FinalCount, apiRes.Result.MaxMass, inventoryUrl)
+
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
+	fmt.Println("----------------------------------------------------------------------------------------------------")
+}
+
+
+=== FILE: ./scripts/agent.go ===
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"time"
+
+	"github.com/gojrs/para-nbody/types"
+)
+
+type SweepConfig struct {
+	Steps               int     `json:"steps"`
+	GridSize            int     `json:"grid_size"`
+	GravitySensitivity  float64 `json:"gravity_sensitivity"`
+	BaseMigrationRate   float64 `json:"base_migration_rate"`
+	StickyClumpRate     float64 `json:"sticky_clump_rate"`
+	PhaseRelaxationRate float64 `json:"phase_relaxation_rate"`
+	TwistFollowRate     float64 `json:"twist_follow_rate"`
+	KernelRadius        int     `json:"kernel_radius"`
+}
+
+func main() {
+	protocol := "http"
+	host := "172.20.192.10:42069"
+	sweepUrl := fmt.Sprintf("%s://%s/api/v1/pnbody/wave-sweep", protocol, host)
+
+	// Operational window bounds for phase relaxation
+	currentRelaxation := 0.0350
+	lowerBound := 0.0250 // Slightly narrowed to keep the nested loop runtime safe
+	relaxationStep := 0.0050
+
+	fmt.Println("🤖 Initializing Automated Horizon Discovery Agent...")
+	fmt.Println("🎯 Scanning Radius Horizons (KR 5 -> 8) across Phase Window...")
+	fmt.Println("---------------------------------------------------------------------------------")
+
+	iteration := 1
+	for currentRelaxation >= lowerBound {
+		twistFollow := currentRelaxation * 0.5
+
+		fmt.Printf("\n🌊 [Phase Relaxation: %.4f | Twist: %.4f]\n", currentRelaxation, twistFollow)
+		fmt.Println("---------------------------------------------------------------------------------")
+		fmt.Printf("%-6s | %-12s | %-16s | %-10s | %-18s\n", "KR", "Universe ID", "Engine Mode", "Quarks (u/d)", "Avg Orbit Radius")
+		fmt.Println("---------------------------------------------------------------------------------")
+
+		// 🎯 NESTED RADIUS HORIZON SWEEP
+		// We step from KR=5 up to KR=8 to locate where the orbit size plateaus
+		for testKR := 5; testKR <= 8; testKR++ {
+
+			cfg := SweepConfig{
+				Steps:               1000,
+				GridSize:            42, // 🌟 Explicit code trigger to route into Engine V2 Phase-Space
+				GravitySensitivity:  0.001,
+				BaseMigrationRate:   0.25,
+				StickyClumpRate:     0.05,
+				PhaseRelaxationRate: currentRelaxation,
+				TwistFollowRate:     twistFollow,
+				KernelRadius:        testKR, // Dynamically modifying the horizon bounds
+			}
+
+			jsonData, _ := json.Marshal(cfg)
+			resp, err := http.Post(sweepUrl, "application/json", bytes.NewBuffer(jsonData))
+			if err != nil {
+				log.Fatalf("Server connection lost: %v", err)
+			}
+
+			var sweepRes map[string]interface{}
+			if err = json.NewDecoder(resp.Body).Decode(&sweepRes); err != nil {
+				resp.Body.Close()
+				continue
+			}
+			resp.Body.Close()
+
+			// Extract string token safely [cite: 26, 27, 28]
+			// Extract string token safely
+			universeID := ""
+			if val, ok := sweepRes["universe_id"]; ok {
+				universeID = fmt.Sprintf("%v", val)
+			} else if val, ok := sweepRes["id"]; ok {
+				universeID = fmt.Sprintf("%v", val) // 🎯 assign the value here!
+			}
+
+			if universeID == "" {
+				continue
+			}
+
+			// Short pause to allow background async disk tasks to stabilize
+			time.Sleep(200 * time.Millisecond)
+
+			// Fetch the calculated metrics ledger inventory [cite: 28, 29]
+			invUrl := fmt.Sprintf("%s://%s/api/v1/pnbody/%s/inventory", protocol, host, universeID)
+			invResp, err := http.Get(invUrl)
+			if err != nil {
+				continue
+			}
+
+			var invData types.InventoryResponse
+			if err := json.NewDecoder(invResp.Body).Decode(&invData); err != nil {
+				invResp.Body.Close()
+				continue
+			}
+			invResp.Body.Close()
+
+			// Extract derived telemetry descriptors [cite: 29]
+			ups := invData.Metrics[types.KeyUpQuark]
+			downs := invData.Metrics[types.KeyDownQuark]
+			avgDistance := invData.AverageDistance
+
+			displayID := universeID
+			if len(universeID) >= 8 {
+				displayID = universeID[:8]
+			}
+
+			engineMode := "V2_PHASE_SPACE"
+			if val, ok := sweepRes["engine_mode"]; ok {
+				engineMode = fmt.Sprintf("%v", val)
+			}
+
+			// Print clean row layout for visual delta checking
+			quarkTelemetry := fmt.Sprintf("%d / %d", ups, downs)
+			fmt.Printf("KR=%-2d | %s | %-16s | %-10s | %.4f voxels\n",
+				testKR, displayID, engineMode, quarkTelemetry, avgDistance)
+
+			// Cooling window buffer to keep the pipeline steady
+			time.Sleep(400 * time.Millisecond)
+		}
+
+		currentRelaxation -= relaxationStep
+		iteration++
+		fmt.Println("---------------------------------------------------------------------------------")
+	}
+}
+
+
+=== FILE: ./scripts/agent_v2_telemetry.go ===
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"time"
+
+	"github.com/gojrs/para-nbody/types"
+)
+
+func main() {
+	protocol := "http"
+	host := "172.20.192.10:42069" // Pointed directly to your local node [cite: 148]
+	baseURL := fmt.Sprintf("%s://%s/api/v1/pnbody", protocol, host)
+
+	fmt.Println("🤖 Initializing V2 Spatio-Temporal Pattern Audit...")
+	fmt.Println("🔬 Target Matrix Window: 42x42x42 Absolute Coordinate Theater")
+	fmt.Println("---------------------------------------------------------------------------------")
+
+	// 1. Ignite the initial universe seed state
+	cfg := types.NBodyConfig{
+		N:                   types.SeedingModeChaos,
+		Steps:               500, // Run initial relaxation steps
+		GridSize:            42,  // Hard locked to hardware cache-friendly envelope
+		KernelRadius:        1,   // Focus on tight localized interactions
+		PhaseRelaxationRate: 0.0300,
+		TwistFollowRate:     0.0150,
+	}
+
+	jsonData, _ := json.Marshal(cfg)
+	resp, err := http.Post(baseURL+"/wave-sweep", "application/json", bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Fatalf("❌ Initialization connection failed: %v", err)
+	}
+
+	var sweepRes map[string]interface{}
+	_ = json.NewDecoder(resp.Body).Decode(&sweepRes)
+	resp.Body.Close()
+
+	universeID, _ := sweepRes["universe_id"].(string)
+	if universeID == "" {
+		log.Fatalf("❌ Failed to secure runtime Universe ID tokens from server")
+	}
+
+	fmt.Printf("🚀 Reality Deployed. Tracking Universe: [%s]\n", universeID)
+	fmt.Println("---------------------------------------------------------------------------------")
+	fmt.Printf("%-10s | %-12s | %-10s | %-12s | %-20s\n", "Master Step", "Pattern Count", "Max State", "Avg Radius", "Dominant Cluster Center")
+	fmt.Println("---------------------------------------------------------------------------------")
+
+	// 2. Continuous Evolutionary Increment & Tracking Loop
+	totalSteps := 500
+	incrementSize := 500
+	maxLifespan := 4000
+
+	for totalSteps <= maxLifespan {
+		// Gather telemetry from current snapshot block
+		invResp, err := http.Get(fmt.Sprintf("%s/%s/inventory", baseURL, universeID))
+		if err != nil {
+			log.Printf("⚠️ Telemetry gap at step %d\n", totalSteps)
+			continue
+		}
+
+		var report types.SpectrumReport
+		if err := json.NewDecoder(invResp.Body).Decode(&report); err != nil {
+			invResp.Body.Close()
+			log.Printf("⚠️ Parse failure on spectrum matrix payload: %v\n", err)
+			continue
+		}
+		invResp.Body.Close()
+
+		// Locate the largest coherent pattern cluster by population weight
+		var dominantCenter string = "N/A (Vacuum Static)"
+		var maxPop int64 = 0
+		for _, p := range report.ActivePatterns {
+			if p.Population > maxPop {
+				maxPop = p.Population
+				dominantCenter = fmt.Sprintf("(%.1f, %.1f, %.1f)", p.CenterX, p.CenterY, p.CenterZ)
+			}
+		}
+
+		// Print clean snapshot log line
+		fmt.Printf("Tick %-5d | %-13d | %-10.2f | %-12.4f | %-20s\n",
+			totalSteps, report.PatternCount, report.MaxState, report.AvgRadius, dominantCenter)
+
+		// 🎨 AUTOMATED VISUAL CATCH: Snag the overlapping Venn slice right here!
+		downloadSliceImage(baseURL, universeID, totalSteps, 21)
+		if totalSteps == maxLifespan {
+			break
+		}
+
+		// Advance time step coordinates downstream
+		runUrl := fmt.Sprintf("%s/%s/run?count=%d", baseURL, universeID, incrementSize)
+		runResp, err := http.Post(runUrl, "application/json", nil)
+		if err != nil {
+			log.Fatalf("\n❌ Master frame sequence severed: %v", err)
+		}
+		runResp.Body.Close()
+
+		totalSteps += incrementSize
+		time.Sleep(200 * time.Millisecond) // Safety settle delay for background storage flushes [cite: 127]
+	}
+	fmt.Println("---------------------------------------------------------------------------------")
+	fmt.Println("🔬 Deep Horizon Sweep Complete. Metrics persisted cleanly inside SQLite store.")
+}
+
+func downloadSliceImage(baseURL, universeID string, step int, targetZ int) {
+	// 1. Define the dedicated directory path for this specific reality thread
+	dirPath := fmt.Sprintf("./renders/universe_%s", universeID)
+
+	// 2. 🛡️ FOLDER CHECKPOINT: Create the path if it doesn't exist yet (0755 = standard read/write permissions)
+	if err := os.MkdirAll(dirPath, 0755); err != nil {
+		log.Printf("⚠️ Failed to establish rendering pipeline directory: %v\n", err)
+		return
+	}
+
+	// 3. Construct the URL to hit our V2 matrix visualizer route
+	url := fmt.Sprintf("%s/%s/heatmap?slice=%d", baseURL, universeID, targetZ)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Printf("⚠️ Image download skip at step %d: %v\n", step, err)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+
+	var imgBytes bytes.Buffer
+	_, _ = imgBytes.ReadFrom(resp.Body)
+
+	// 4. Clean, protected, sequential naming layout isolated inside the folder
+	filename := fmt.Sprintf("%s/tick_%04d.png", dirPath, step)
+
+	// Flush bytes safely to the isolated subdirectory
+	_ = os.WriteFile(filename, imgBytes.Bytes(), 0644)
+}
+
+
+=== FILE: ./engine/world.go ===
+package engine
+
+import (
+	"encoding/json"
+	"math"
+	"runtime"
+	"sync"
+
+	"github.com/gojrs/para-nbody/types"
+)
+
+type World struct {
+	ID                string                  `json:"id"` // 🌟 Added to satisfy types.Universe
+	Width             int                     `json:"width"`
+	Height            int                     `json:"height"`
+	Depth             int                     `json:"depth"`
+	RepulsionStrength float64                 `json:"repulsion_strength"`
+	Cells             [][][]types.LedgerState `json:"cells"`
+	Tracers           []types.TracerBody      `json:"tracers"`
+
+	// --- AUTOMATION RUNTIME FIELDS ---
+	GravitySensitivity  float64 `json:"gravity_sensitivity"`
+	BaseMigrationRate   float64 `json:"base_migration_rate"`
+	StickyClumpRate     float64 `json:"sticky_clump_rate"`
+	PhaseRelaxationRate float64 `json:"phase_relaxation_rate"`
+	TwistFollowRate     float64 `json:"twist_follow_rate"`
+	KernelRadius        int     `json:"kernel_radius"`
+
+	// ✨ --- ENGINE V2 PLANCK RUNTIME FIELDS (DOUBLE BUFFERED) --- ✨
+	IsV2          bool                     `json:"is_v2"`
+	CellsV2       [][][]types.IntegerState `json:"cells_v2"`
+	CellsV2Buffer [][][]types.IntegerState `json:"cells_v2_buf"`
+}
+
+func NewWorld(id string, width, height, depth int) World {
+	world := World{
+		ID:                id, // 🌟 Bound here
+		Width:             width,
+		Height:            height,
+		Depth:             depth,
+		RepulsionStrength: 1.0,
+		Cells:             make([][][]types.LedgerState, width),
+		Tracers:           make([]types.TracerBody, 0),
+	}
+
+	for x := 0; x < width; x++ {
+		world.Cells[x] = make([][]types.LedgerState, height)
+		for y := 0; y < height; y++ {
+			world.Cells[x][y] = make([]types.LedgerState, depth)
+			for z := 0; z < depth; z++ {
+				world.Cells[x][y][z] = types.LedgerState{}
+			}
+		}
+	}
+	return world
+}
+
+func (w *World) HydratePillar(x, y, z int, recipe types.Multivector) {
+	if x < 0 || x >= w.Width || y < 0 || y >= w.Height || z < 0 || z >= w.Depth {
+		return
+	}
+	current := w.Cells[x][y][z]
+	current.Fields = current.Fields.Add(recipe)
+	current.Energy = current.Fields.NetCurvature()
+	current.Commit = false
+	w.Cells[x][y][z] = current
+}
+
+func (w *World) CloneCells() [][][]types.LedgerState {
+	cloned := make([][][]types.LedgerState, w.Width)
+	for x := 0; x < w.Width; x++ {
+		cloned[x] = make([][]types.LedgerState, w.Height)
+		for y := 0; y < w.Height; y++ {
+			cloned[x][y] = make([]types.LedgerState, w.Depth)
+			copy(cloned[x][y], w.Cells[x][y])
+		}
+	}
+	return cloned
+}
+
+func (w *World) Step() {
+
+	// 1. Only subtract mass from cells occupied by actual tracers
+	for _, tracer := range w.Tracers {
+		tx := int(math.Round(tracer.Position[0]))
+		ty := int(math.Round(tracer.Position[1]))
+		tz := int(math.Round(tracer.Position[2]))
+
+		if tx > 0 && tx < w.Width-1 && ty > 0 && ty < w.Height-1 && tz > 0 && tz < w.Depth-1 {
+			if tracer.IsMatter {
+				w.Cells[tx][ty][tz].Fields.V[3] -= tracer.BaseMass
+				if w.Cells[tx][ty][tz].Fields.V[3] < 0 {
+					w.Cells[tx][ty][tz].Fields.V[3] = 0
+				}
+			} else {
+				w.Cells[tx][ty][tz].Fields.V[4] -= tracer.BaseMass
+				if w.Cells[tx][ty][tz].Fields.V[4] < 0 {
+					w.Cells[tx][ty][tz].Fields.V[4] = 0
+				}
+			}
+		}
+	}
+
+	// 2. Tracer-to-Grid Deposition Phase
+	for _, tracer := range w.Tracers {
+		tx := int(math.Round(tracer.Position[0]))
+		ty := int(math.Round(tracer.Position[1]))
+		tz := int(math.Round(tracer.Position[2]))
+
+		if tx > 0 && tx < w.Width-1 && ty > 0 && ty < w.Height-1 && tz > 0 && tz < w.Depth-1 {
+			if tracer.IsMatter {
+				w.Cells[tx][ty][tz].Fields.V[3] += tracer.BaseMass
+			} else {
+				w.Cells[tx][ty][tz].Fields.V[4] += tracer.BaseMass
+			}
+		}
+	}
+
+	// 3. Initialize transactional nextCells buffer
+	nextCells := w.CloneCells()
+
+	dx := [6]int{1, -1, 0, 0, 0, 0}
+	dy := [6]int{0, 0, 1, -1, 0, 0}
+	dz := [6]int{0, 0, 0, 0, 1, -1}
+
+	// 4. Dispatch Concurrent Spatial Workers
+	numCores := runtime.NumCPU()
+
+	chunksPerAxis := int(math.Ceil(math.Cbrt(float64(numCores))))
+	if chunksPerAxis < 1 {
+		chunksPerAxis = 1
+	}
+
+	radius := w.KernelRadius
+	if radius == 0 {
+		radius = 3
+	}
+	attractionLimit := float64(radius) * (2.0 / 3.0)
+
+	chunkDimX := int(math.Ceil(float64(w.Width-(radius*2)) / float64(chunksPerAxis)))
+	chunkDimY := int(math.Ceil(float64(w.Height-(radius*2)) / float64(chunksPerAxis)))
+	chunkDimZ := int(math.Ceil(float64(w.Depth-(radius*2)) / float64(chunksPerAxis)))
+
+	var wg sync.WaitGroup
+
+	const ConstructiveThreshold = 6.5
+	const DestructiveThreshold = -2.0
+
+	for cx := 0; cx < chunksPerAxis; cx++ {
+		for cy := 0; cy < chunksPerAxis; cy++ {
+			for cz := 0; cz < chunksPerAxis; cz++ {
+
+				startX := radius + (cx * chunkDimX)
+				endX := startX + chunkDimX
+				if endX > w.Width-radius {
+					endX = w.Width - radius
+				}
+
+				startY := radius + (cy * chunkDimY)
+				endY := startY + chunkDimY
+				if endY > w.Height-radius {
+					endY = w.Height - radius
+				}
+
+				startZ := radius + (cz * chunkDimZ)
+				endZ := startZ + chunkDimZ
+				if endZ > w.Depth-radius {
+					endZ = w.Depth - radius
+				}
+
+				if startX >= endX || startY >= endY || startZ >= endZ {
+					continue
+				}
+
+				wg.Add(1)
+				go func(sX, eX, sY, eY, sZ, eZ int) {
+					defer wg.Done()
+
+					for x := sX; x < eX; x++ {
+						for y := sY; y < eY; y++ {
+							for z := sZ; z < eZ; z++ {
+
+								cell := w.Cells[x][y][z]
+								var netInterference float64 = 0.0
+
+								for i := 0; i < 6; i++ {
+									nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
+									neigh := w.Cells[nx][ny][nz]
+
+									phaseDiff := cell.Fields.Phase - neigh.Fields.Phase
+									interference := cell.Fields.Amplitude * neigh.Fields.Amplitude * math.Cos(phaseDiff)
+									netInterference += interference
+								}
+
+								if netInterference >= ConstructiveThreshold {
+									nextCells[x][y][z].Fields.V[3] += netInterference * 0.15
+									nextCells[x][y][z].Fields.V[0] += netInterference * 0.5
+									nextCells[x][y][z].Fields.Amplitude *= 0.1
+								} else if netInterference <= DestructiveThreshold {
+									nextCells[x][y][z].Fields.V[3] += 0.5
+									nextCells[x][y][z].Fields.Phase *= 0.5
+								}
+
+								mVal := nextCells[x][y][z].Fields.V[3]
+								aVal := nextCells[x][y][z].Fields.V[4]
+
+								if mVal > 0 || aVal > 0 {
+									netCurvature := mVal - aVal
+									distanceFromSurface := math.Abs(netCurvature)
+
+									const SpatialRigidityConstant = 0.15
+									dragFactor := 1.0 / (1.0 + (distanceFromSurface * SpatialRigidityConstant))
+
+									var pullX, pullY, pullZ float64
+									var elecX, elecY, elecZ float64
+
+									for dxLocal := -radius; dxLocal <= radius; dxLocal++ {
+										for dyLocal := -radius; dyLocal <= radius; dyLocal++ {
+											for dzLocal := -radius; dzLocal <= radius; dzLocal++ {
+												nx, ny, nz := x+dxLocal, y+dyLocal, z+dzLocal
+
+												if nx >= 0 && nx < w.Width && ny >= 0 && ny < w.Height && nz >= 0 && nz < w.Depth {
+													targetCell := w.Cells[nx][ny][nz]
+													distSq := float64(dxLocal*dxLocal + dyLocal*dyLocal + dzLocal*dzLocal)
+
+													if distSq > 0 {
+														if math.Abs(float64(dxLocal)) <= attractionLimit &&
+															math.Abs(float64(dyLocal)) <= attractionLimit &&
+															math.Abs(float64(dzLocal)) <= attractionLimit {
+															if targetCell.Fields.V[3] > 0 {
+																force := targetCell.Fields.V[3] / distSq
+																pullX += (float64(dxLocal) / math.Sqrt(distSq)) * force
+																pullY += (float64(dyLocal) / math.Sqrt(distSq)) * force
+																pullZ += (float64(dzLocal) / math.Sqrt(distSq)) * force
+															}
+														}
+
+														neighborTwist := targetCell.Fields.V[1]
+														if neighborTwist != 0 {
+															chargeInteraction := cell.Fields.V[1] * neighborTwist
+															var twistForce float64
+															if chargeInteraction < 0 {
+																twistForce = math.Abs(chargeInteraction) / distSq
+															} else {
+																twistForce = -(chargeInteraction) / distSq
+															}
+
+															elecX += (float64(dxLocal) / math.Sqrt(distSq)) * twistForce
+															elecY += (float64(dyLocal) / math.Sqrt(distSq)) * twistForce
+															elecZ += (float64(dzLocal) / math.Sqrt(distSq)) * twistForce
+														}
+													}
+												}
+											}
+										}
+									}
+
+									var mWeights, aWeights [6]float64
+									var mTotalWeight, aTotalWeight float64
+
+									for i := 0; i < 6; i++ {
+										nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
+										neigh := w.Cells[nx][ny][nz]
+
+										localPullFactor := 0.0
+										if dx[i] != 0 {
+											localPullFactor = pullX * float64(dx[i])
+										}
+										if dy[i] != 0 {
+											localPullFactor = pullY * float64(dy[i])
+										}
+										if dz[i] != 0 {
+											localPullFactor = pullZ * float64(dz[i])
+										}
+
+										localTwistFactor := 0.0
+										if dx[i] != 0 {
+											localTwistFactor = elecX * float64(dx[i])
+										}
+										if dy[i] != 0 {
+											localTwistFactor = elecY * float64(dy[i])
+										}
+										if dz[i] != 0 {
+											localTwistFactor = elecZ * float64(dz[i])
+										}
+
+										mWeights[i] = 1.0 + (neigh.Fields.V[3] * 0.5) - (neigh.Fields.V[4] * 0.2 * w.RepulsionStrength) + (localPullFactor * 0.1) + (localTwistFactor * 0.15)
+										if mWeights[i] < 0.001 {
+											mWeights[i] = 0.001
+										}
+										mTotalWeight += mWeights[i]
+
+										aWeights[i] = 1.0 + (neigh.Fields.V[4] * 0.5) - (neigh.Fields.V[3] * 0.2 * w.RepulsionStrength)
+										if aWeights[i] < 0.001 {
+											aWeights[i] = 0.001
+										}
+										aTotalWeight += aWeights[i]
+									}
+
+									mMigrationRate := w.BaseMigrationRate
+									if mVal > 5.0 {
+										mMigrationRate = w.StickyClumpRate
+									}
+									aMigrationRate := w.BaseMigrationRate
+									if aVal > 5.0 {
+										aMigrationRate = w.StickyClumpRate
+									}
+
+									mOutTotal := mVal * mMigrationRate * dragFactor
+									aOutTotal := aVal * aMigrationRate * dragFactor
+
+									nextCells[x][y][z].Fields.V[3] -= mOutTotal
+									nextCells[x][y][z].Fields.V[4] -= aOutTotal
+
+									for i := 0; i < 6; i++ {
+										nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
+										if mOutTotal > 0 && mTotalWeight > 0 {
+											nextCells[nx][ny][nz].Fields.V[3] += mOutTotal * (mWeights[i] / mTotalWeight)
+										}
+										if aOutTotal > 0 && aTotalWeight > 0 {
+											nextCells[nx][ny][nz].Fields.V[4] += aOutTotal * (aWeights[i] / aTotalWeight)
+										}
+									}
+								}
+
+								var netPhaseGlow float64 = 0.0
+								var neighborCount float64 = 0.0
+
+								for i := 0; i < 6; i++ {
+									nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
+									if nx >= 0 && nx < w.Width && ny >= 0 && ny < w.Height && nz >= 0 && nz < w.Depth {
+										netPhaseGlow += w.Cells[nx][ny][nz].Fields.Phase
+										neighborCount++
+									}
+								}
+
+								if neighborCount > 0 {
+									averageNeighborPhase := netPhaseGlow / neighborCount
+									nextCells[x][y][z].Fields.Phase += (averageNeighborPhase - cell.Fields.Phase) * w.PhaseRelaxationRate
+									nextCells[x][y][z].Fields.V[1] += (averageNeighborPhase - cell.Fields.Phase) * w.TwistFollowRate
+								}
+
+							}
+						}
+					}
+				}(startX, endX, startY, endY, startZ, endZ)
+
+			}
+		}
+	}
+
+	wg.Wait()
+
+	for x := 1; x < w.Width-1; x++ {
+		for y := 1; y < w.Height-1; y++ {
+			for z := 1; z < w.Depth-1; z++ {
+				cell := &nextCells[x][y][z]
+				m := cell.Fields.V[3]
+				a := cell.Fields.V[4]
+
+				if m > 0 && a > 0 {
+					annihilationAmt := math.Min(m, a) * 0.5
+					cell.Fields.V[3] -= annihilationAmt
+					cell.Fields.V[4] -= annihilationAmt
+				}
+
+				if cell.Fields.V[3] < 1e-4 {
+					cell.Fields.V[3] = 0
+				}
+				if cell.Fields.V[4] < 1e-4 {
+					cell.Fields.V[4] = 0
+				}
+
+				cell.Energy = cell.Fields.NetCurvature()
+				cell.Commit = true
+			}
+		}
+	}
+
+	w.Cells = nextCells
+
+	for idx := range w.Tracers {
+		tracer := &w.Tracers[idx]
+		tx := int(math.Round(tracer.Position[0]))
+		ty := int(math.Round(tracer.Position[1]))
+		tz := int(math.Round(tracer.Position[2]))
+
+		bounceDampening := -0.9
+		if tx <= 1 || tx >= w.Width-2 {
+			tracer.Velocity[0] *= bounceDampening
+			tracer.Position[0] += tracer.Velocity[0]
+		}
+		if ty <= 1 || ty >= w.Height-2 {
+			tracer.Velocity[1] *= bounceDampening
+			tracer.Position[1] += tracer.Velocity[1]
+		}
+		if tz <= 1 || tz >= w.Depth-2 {
+			tracer.Velocity[2] *= bounceDampening
+			tracer.Position[2] += tracer.Velocity[2]
+		}
+
+		tx = int(math.Round(tracer.Position[0]))
+		ty = int(math.Round(tracer.Position[1]))
+		tz = int(math.Round(tracer.Position[2]))
+
+		if tx <= 0 || tx >= w.Width-1 || ty <= 0 || ty >= w.Height-1 || tz <= 0 || tz >= w.Depth-1 {
+			continue
+		}
+
+		gradX := w.Cells[tx+1][ty][tz].Energy - w.Cells[tx-1][ty][tz].Energy
+		gradY := w.Cells[tx][ty+1][tz].Energy - w.Cells[tx][ty-1][tz].Energy
+		gradZ := w.Cells[tx][ty][tz+1].Energy - w.Cells[tx][ty][tz-1].Energy
+
+		chargeSign := 1.0
+		if !tracer.IsMatter {
+			chargeSign = -1.0 * w.RepulsionStrength
+		}
+
+		tracer.Velocity[0] += gradX * w.GravitySensitivity * chargeSign
+		tracer.Velocity[1] += gradY * w.GravitySensitivity * chargeSign
+		tracer.Velocity[2] += gradZ * w.GravitySensitivity * chargeSign
+
+		tracer.Position[0] += tracer.Velocity[0]
+		tracer.Position[1] += tracer.Velocity[1]
+		tracer.Position[2] += tracer.Velocity[2]
+	}
+}
+
+func (w *World) CalculateElectronProtonDistances() []float64 {
+	var protonCoords [][3]int
+	var electronCoords [][3]int
+
+	if w.IsV2 {
+		for x := w.KernelRadius; x < w.Width-w.KernelRadius; x++ {
+			for y := w.KernelRadius; y < w.Height-w.KernelRadius; y++ {
+				for z := w.KernelRadius; z < w.Depth-w.KernelRadius; z++ {
+					cell := w.CellsV2[x][y][z]
+					tension := cell.CalculateTension()
+					charge := cell.CalculateCharge()
+
+					if tension >= 12000 && charge > 2000 {
+						protonCoords = append(protonCoords, [3]int{x, y, z})
+					}
+					if charge < -1000 {
+						electronCoords = append(electronCoords, [3]int{x, y, z})
+					}
+				}
+			}
+		}
+	} else {
+		for x := 1; x < w.Width-1; x++ {
+			for y := 1; y < w.Height-1; y++ {
+				for z := 1; z < w.Depth-1; z++ {
+					mVal := w.Cells[x][y][z].Fields.V[3]
+					aVal := w.Cells[x][y][z].Fields.V[4]
+
+					if mVal > 0 && (mVal-aVal) >= 6.5 {
+						protonCoords = append(protonCoords, [3]int{x, y, z})
+					}
+					if w.Cells[x][y][z].Fields.V[1] < -0.1 {
+						electronCoords = append(electronCoords, [3]int{x, y, z})
+					}
+				}
+			}
+		}
+	}
+
+	if len(protonCoords) == 0 || len(electronCoords) == 0 {
+		return []float64{}
+	}
+
+	var minDistances []float64
+	for _, eCoord := range electronCoords {
+		closestDist := math.MaxFloat64
+		for _, pCoord := range protonCoords {
+			dx := float64(eCoord[0] - pCoord[0])
+			dy := float64(eCoord[1] - pCoord[1])
+			dz := float64(eCoord[2] - pCoord[2])
+
+			dist := math.Sqrt(dx*dx + dy*dy + dz*dz)
+			if dist < closestDist {
+				closestDist = dist
+			}
+		}
+		minDistances = append(minDistances, closestDist)
+	}
+
+	return minDistances
+}
+
+// 🗑️ Old hardcoded w.StepV2() method stripped completely because it was replaced by engine.V2World!
+
+func (w *World) GetID() string { return w.ID }
+
+func (w *World) GetDimensions() (int, int, int) { return w.Width, w.Height, w.Depth }
+
+func (w *World) ToJSON() ([]byte, error) {
+	w.IsV2 = false
+	return json.Marshal(w)
+}
+
+func (w *World) GenerateInventory(step int64) types.SpectrumReport {
+	return types.SpectrumReport{
+		NumSteps:       step,
+		ActivePatterns: []types.PatternProfile{},
+	}
+}
+
+
+=== FILE: ./engine/world_v2.go ===
+package engine
+
+import (
+	"encoding/json"
+	"math"
+	"runtime"
+	"sync"
+
+	"github.com/gojrs/para-nbody/types"
+)
+
+// V2World satisfies the types.V2PlanckUniverse interface completely.
+type V2World struct {
+	ID                  string                `json:"id"`
+	Width               int                   `json:"width"`
+	Height              int                   `json:"height"`
+	Depth               int                   `json:"depth"`
+	KernelRadius        int                   `json:"kernel_radius"`
+	PhaseRelaxationRate float64               `json:"phase_relaxation_rate"`
+	TwistFollowRate     float64               `json:"twist_follow_rate"`
+	Cells               [][][]types.Pixel     `json:"cells"`
+	Buffer              [][][]types.Pixel     `json:"buffer"`
+	SeedingMode         types.NBodyConfigMode `json:"seeding_mode"`
+}
+
+// NewV2World instantiates the high-performance discrete matrix layer.
+func NewV2World(id string, w, h, d, kr int, relaxation, twist float64, mode types.NBodyConfigMode) *V2World {
+	world := &V2World{
+		ID:                  id,
+		Width:               w,
+		Height:              h,
+		Depth:               d,
+		KernelRadius:        kr,
+		PhaseRelaxationRate: relaxation,
+		TwistFollowRate:     twist,
+		Cells:               make([][][]types.Pixel, w),
+		Buffer:              make([][][]types.Pixel, w),
+		SeedingMode:         mode,
+	}
+
+	for x := 0; x < w; x++ {
+		world.Cells[x] = make([][]types.Pixel, h)
+		world.Buffer[x] = make([][]types.Pixel, h)
+		for y := 0; y < h; y++ {
+			world.Cells[x][y] = make([]types.Pixel, d)
+			world.Buffer[x][y] = make([]types.Pixel, d)
+		}
+	}
+	return world
+}
+
+func (w *V2World) GetID() string                  { return w.ID }
+func (w *V2World) GetDimensions() (int, int, int) { return w.Width, w.Height, w.Depth }
+func (w *V2World) ToJSON() ([]byte, error)        { return json.Marshal(w) }
+
+func (w *V2World) GetPixel(x, y, z int) types.Pixel    { return w.Cells[x][y][z] }
+func (w *V2World) SetPixel(x, y, z int, p types.Pixel) { w.Cells[x][y][z] = p }
+
+// Step runs the discrete Alice and Bob mechanics with zero runtime heap allocations.
+func (w *V2World) Step() {
+	dx := [6]int{1, -1, 0, 0, 0, 0}
+	dy := [6]int{0, 0, 1, -1, 0, 0}
+	dz := [6]int{0, 0, 0, 0, 1, -1}
+
+	numCores := runtime.NumCPU()
+	chunksPerAxis := int(math.Ceil(math.Cbrt(float64(numCores))))
+	if chunksPerAxis < 1 {
+		chunksPerAxis = 1
+	}
+
+	radius := w.KernelRadius
+	if radius == 0 {
+		radius = 3
+	}
+
+	chunkDimX := int(math.Ceil(float64(w.Width-(radius*2)) / float64(chunksPerAxis)))
+	chunkDimY := int(math.Ceil(float64(w.Height-(radius*2)) / float64(chunksPerAxis)))
+	chunkDimZ := int(math.Ceil(float64(w.Depth-(radius*2)) / float64(chunksPerAxis)))
+
+	var wg sync.WaitGroup
+
+	// Clear write buffer up front to avoid artifact ghosting across frames
+	w.clearBuffer(radius)
+
+	for cx := 0; cx < chunksPerAxis; cx++ {
+		for cy := 0; cy < chunksPerAxis; cy++ {
+			for cz := 0; cz < chunksPerAxis; cz++ {
+
+				startX := radius + (cx * chunkDimX)
+				endX := startX + chunkDimX
+				if endX > w.Width-radius {
+					endX = w.Width - radius
+				}
+
+				startY := radius + (cy * chunkDimY)
+				endY := startY + chunkDimY
+				if endY > w.Height-radius {
+					endY = w.Height - radius
+				}
+
+				startZ := radius + (cz * chunkDimZ)
+				endZ := startZ + chunkDimZ
+				if endZ > w.Depth-radius {
+					endZ = w.Depth - radius
+				}
+
+				if startX >= endX || startY >= endY || startZ >= endZ {
+					continue
+				}
+
+				wg.Add(1)
+				go func(sX, eX, sY, eY, sZ, eZ int) {
+					defer wg.Done()
+
+					for x := sX; x < eX; x++ {
+						for y := sY; y < eY; y++ {
+							for z := sZ; z < eZ; z++ {
+								room := w.Cells[x][y][z]
+
+								currentTension := int64(math.Sqrt(float64(
+									room.Alice.X*room.Alice.X + room.Alice.Y*room.Alice.Y +
+										room.Bob.X*room.Bob.X + room.Bob.Y*room.Bob.Y)))
+
+								var pullX, pullY, pullZ int64
+
+								for dxLocal := -radius; dxLocal <= radius; dxLocal++ {
+									for dyLocal := -radius; dyLocal <= radius; dyLocal++ {
+										for dzLocal := -radius; dzLocal <= radius; dzLocal++ {
+											target := w.Cells[x+dxLocal][y+dyLocal][z+dzLocal]
+											distSq := int64(dxLocal*dxLocal + dyLocal*dyLocal + dzLocal*dzLocal)
+
+											if distSq > 0 {
+												targetTension := int64(math.Sqrt(float64(
+													target.Alice.X*target.Alice.X + target.Alice.Y*target.Alice.Y +
+														target.Bob.X*target.Bob.X + target.Bob.Y*target.Bob.Y)))
+
+												gradientForce := (targetTension - currentTension) / distSq
+												pullX += int64(dxLocal) * gradientForce
+												pullY += int64(dyLocal) * gradientForce
+												pullZ += int64(dzLocal) * gradientForce
+											}
+										}
+									}
+								}
+
+								w.Buffer[x][y][z].Destination.X = room.Destination.X + uint64(pullX)
+								w.Buffer[x][y][z].Destination.Y = room.Destination.Y + uint64(pullY)
+								w.Buffer[x][y][z].Destination.Z = room.Destination.Z + uint64(pullZ)
+
+								const PlanckLimit = 12000
+								if currentTension > PlanckLimit {
+									w.Buffer[x][y][z].Alice.X = (room.Alice.X + room.Bob.Y) / 2
+									w.Buffer[x][y][z].Bob.Y = -w.Buffer[x][y][z].Alice.X
+								} else {
+									w.Buffer[x][y][z].Alice.X = room.Alice.X
+									w.Buffer[x][y][z].Bob.Y = room.Bob.Y
+								}
+
+								const ScalingDampener = 100
+								moveX := int64(w.Buffer[x][y][z].Destination.X) / ScalingDampener
+								moveY := int64(w.Buffer[x][y][z].Destination.Y) / ScalingDampener
+								moveZ := int64(w.Buffer[x][y][z].Destination.Z) / ScalingDampener
+
+								for i := 0; i < 6; i++ {
+									nx := x + dx[i]
+									ny := y + dy[i]
+									nz := z + dz[i]
+
+									w.Buffer[nx][ny][nz].Alice.Y += moveX * int64(dx[i])
+									w.Buffer[nx][ny][nz].Bob.X += moveY * int64(dy[i])
+									w.Buffer[nx][ny][nz].Alice.X += moveZ * int64(dz[i])
+								}
+							}
+						}
+					}
+				}(startX, endX, startY, endY, startZ, endZ)
+			}
+		}
+	}
+
+	wg.Wait()
+
+	// Swap matrix sheets
+	w.Cells, w.Buffer = w.Buffer, w.Cells
+}
+
+func (w *V2World) clearBuffer(radius int) {
+	for x := radius; x < w.Width-radius; x++ {
+		for y := radius; y < w.Height-radius; y++ {
+			for z := radius; z < w.Depth-radius; z++ {
+				w.Buffer[x][y][z] = types.Pixel{}
+			}
+		}
+	}
+}
+
+
+=== FILE: ./engine/tracker_v2.go ===
+package engine
+
+import (
+	"crypto/md5"
+	"fmt"
+	"math"
+
+	"github.com/gojrs/para-nbody/types"
+)
+
+func (w *V2World) GenerateInventory(currentStep int64) types.SpectrumReport {
+	visited := make([][][]bool, w.Width)
+	for i := range visited {
+		visited[i] = make([][]bool, w.Height)
+		for j := range visited[i] {
+			visited[i][j] = make([]bool, w.Depth)
+		}
+	}
+
+	var report types.SpectrumReport
+	report.NumSteps = currentStep
+
+	type Coord struct{ X, Y, Z int }
+	var activePatterns []types.PatternProfile
+
+	// 🔬 THE STRUCTURAL FIREWALL GATE
+	// Only count cells as structurally active if their combined field intensity
+	// crosses this minimum baseline threshold. This strips out background vacuum static.
+	const MaterialDensityThreshold = 50.0
+
+	for x := 0; x < w.Width; x++ {
+		for y := 0; y < w.Height; y++ {
+			for z := 0; z < w.Depth; z++ {
+				p := w.Cells[x][y][z]
+
+				// Calculate localized scalar field tension
+				cellMagnitude := math.Sqrt(float64(p.Alice.X*p.Alice.X + p.Alice.Y*p.Alice.Y + p.Bob.X*p.Bob.X + p.Bob.Y*p.Bob.Y))
+
+				if math.IsNaN(cellMagnitude) || math.IsInf(cellMagnitude, 0) {
+					continue
+				}
+
+				// 🌟 THE FILTER SWITCH: Skip cells that don't cross our density line
+				if cellMagnitude < MaterialDensityThreshold {
+					continue
+				}
+
+				report.OccupiedCells++
+				report.AvgState += cellMagnitude
+				if cellMagnitude > report.MaxState {
+					report.MaxState = cellMagnitude
+				}
+
+				// If it crosses the threshold and hasn't been visited, map the isolated structure!
+				if !visited[x][y][z] {
+					report.PatternCount++
+
+					queue := []Coord{{X: x, Y: y, Z: z}}
+					visited[x][y][z] = true
+
+					var clusterVoxels []Coord
+					var cSumX, cSumY, cSumZ float64
+					var cMaxState float64
+					var cSumState float64
+
+					for len(queue) > 0 {
+						curr := queue[0]
+						queue = queue[1:]
+						clusterVoxels = append(clusterVoxels, curr)
+
+						room := w.Cells[curr.X][curr.Y][curr.Z]
+						mag := math.Sqrt(float64(room.Alice.X*room.Alice.X + room.Alice.Y*room.Alice.Y + room.Bob.X*room.Bob.X + room.Bob.Y*room.Bob.Y))
+
+						if !math.IsNaN(mag) && !math.IsInf(mag, 0) {
+							cSumState += mag
+							if mag > cMaxState {
+								cMaxState = mag
+							}
+						}
+
+						cSumX += float64(curr.X)
+						cSumY += float64(curr.Y)
+						cSumZ += float64(curr.Z)
+
+						neighbors := []Coord{
+							{X: (curr.X + 1) % w.Width, Y: curr.Y, Z: curr.Z},
+							{X: (curr.X - 1 + w.Width) % w.Width, Y: curr.Y, Z: curr.Z},
+							{X: curr.X, Y: (curr.Y + 1) % w.Height, Z: curr.Z},
+							{X: curr.X, Y: (curr.Y - 1 + w.Height) % w.Height, Z: curr.Z},
+							{X: curr.X, Y: curr.Y, Z: (curr.Z + 1) % w.Depth},
+							{X: curr.X, Y: curr.Y, Z: (curr.Z - 1 + w.Depth) % w.Depth},
+						}
+
+						for _, n := range neighbors {
+							if !visited[n.X][n.Y][n.Z] {
+								np := w.Cells[n.X][n.Y][n.Z]
+
+								// 🌟 NEIGHBOR FLOOD FILTER: Only spread the fill if the neighbor also passes density!
+								nMag := math.Sqrt(float64(np.Alice.X*np.Alice.X + np.Alice.Y*np.Alice.Y + np.Bob.X*np.Bob.X + np.Bob.Y*np.Bob.Y))
+
+								if !math.IsNaN(nMag) && nMag >= MaterialDensityThreshold {
+									visited[n.X][n.Y][n.Z] = true
+									queue = append(queue, n)
+								}
+							}
+						}
+					}
+
+					pop := int64(len(clusterVoxels))
+					if pop > report.LargestPattern {
+						report.LargestPattern = pop
+					}
+
+					var cX, cY, cZ float64
+					if pop > 0 {
+						cX = cSumX / float64(pop)
+						cY = cSumY / float64(pop)
+						cZ = cSumZ / float64(pop)
+					}
+
+					var clusterRadiusSum float64
+					for _, v := range clusterVoxels {
+						dx := float64(v.X) - cX
+						dy := float64(v.Y) - cY
+						dz := float64(v.Z) - cZ
+						distSq := dx*dx + dy*dy + dz*dz
+						if distSq > 0 {
+							clusterRadiusSum += math.Sqrt(distSq)
+						}
+					}
+
+					avgRadius := 0.0
+					if pop > 0 {
+						avgRadius = clusterRadiusSum / float64(pop)
+					}
+
+					if math.IsNaN(avgRadius) || math.IsInf(avgRadius, 0) { avgRadius = 0.0 }
+					if math.IsNaN(cX) { cX = 0.0 }
+					if math.IsNaN(cY) { cY = 0.0 }
+					if math.IsNaN(cZ) { cZ = 0.0 }
+
+					hasher := md5.New()
+					hasher.Write([]byte(fmt.Sprintf("%d-%.3f-%.3f", currentStep, cX, cY)))
+					pID := fmt.Sprintf("%x", hasher.Sum(nil))[:8]
+
+					activePatterns = append(activePatterns, types.PatternProfile{
+						ID:         pID,
+						FirstSeen:  currentStep,
+						LastSeen:   currentStep,
+						Population: pop,
+						AvgRadius:  avgRadius,
+						AvgState:   cSumState / float64(pop),
+						MaxState:   cMaxState,
+						CenterX:    cX,
+						CenterY:    cY,
+						CenterZ:    cZ,
+					})
+				}
+			}
+		}
+	}
+
+	if report.OccupiedCells > 0 {
+		report.AvgState /= float64(report.OccupiedCells)
+	}
+	if math.IsNaN(report.AvgState) {
+		report.AvgState = 0.0
+	}
+
+	var globalRadiusSum float64
+	for _, p := range activePatterns {
+		if !math.IsNaN(p.AvgRadius) {
+			globalRadiusSum += p.AvgRadius
+		}
+	}
+
+	if len(activePatterns) > 0 {
+		report.AvgRadius = globalRadiusSum / float64(len(activePatterns))
+	}
+	if math.IsNaN(report.AvgRadius) {
+		report.AvgRadius = 0.0
+	}
+
+	report.ActivePatterns = activePatterns
+	return report
+}
+
+
+=== FILE: ./engine/wm.go ===
+package engine
+
+import (
+	"fmt"
+
+	"github.com/gojrs/para-nbody/types"
+	"github.com/google/uuid"
+)
+
+// UniverseStore now saves and retrieves the master interface boundary contract
+type UniverseStore interface {
+	Create(id string, world types.Universe) error
+	Get(id string) (types.Universe, bool, error)
+	Update(id string, world types.Universe) error
+	Delete(id string) error
+	Close() error
+}
+
+type WorldManager struct {
+	store UniverseStore
+}
+
+func NewWorldManager(store UniverseStore) *WorldManager {
+	return &WorldManager{
+		store: store,
+	}
+}
+
+// CreateUniverse defaults to creating a V2World now, but outputs the universal interface token
+func (m *WorldManager) CreateUniverse(w, h, d int) (string, error) {
+	id := uuid.New().String()
+
+	// Defaulting to your high-performance discrete engine matrix
+	newWorld := NewV2World(id, w, h, d, 1, 0.0300, 0.0150, types.SeedingModeStandard)
+
+	if err := m.store.Create(id, newWorld); err != nil {
+		return "", fmt.Errorf("create universe %q: %w", id, err)
+	}
+
+	return id, nil
+}
+
+// GetUniverse now drops a clean types.Universe interface into the handlers floor!
+func (m *WorldManager) GetUniverse(id string) (types.Universe, bool, error) {
+	return m.store.Get(id)
+}
+
+// UpdateUniverse persists alterations to any interface-compliant world state
+func (m *WorldManager) UpdateUniverse(id string, world types.Universe) error {
+	if err := m.store.Update(id, world); err != nil {
+		return fmt.Errorf("update universe %q: %w", id, err)
+	}
+
+	return nil
+}
+
+func (m *WorldManager) Stop() {
+	if m == nil || m.store == nil {
+		return
+	}
+	_ = m.store.Close()
+}
+
+
+=== FILE: ./handlers/handlers.go ===
+package handlers
+
+import (
+	"bytes"
+	"fmt"
+	"image"
+	"image/color"
+	"image/png"
+	"math"
+	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/gojrs/para-nbody/engine"
+	"github.com/gojrs/para-nbody/types"
+	"github.com/google/uuid"
+)
+
+type Handler struct {
+	WorldManager *engine.WorldManager
+}
+
+func NewHandler(worldManager *engine.WorldManager) *Handler {
+	return &Handler{WorldManager: worldManager}
+}
+
+func (h *Handler) RegisterRoutes(router *gin.Engine) {
+	apiV1 := router.Group("/api/v1")
+	{
+		apiV1.POST("/pnbody/init", h.PNBodyIni)
+		apiV1.GET("/pnbody/:id", h.PNBodyByID)
+		apiV1.POST("/pnbody/:id/run", h.RunSteps)
+		apiV1.POST("/pnbody/wave-sweep", h.HandleWaveSweepRequest)
+		apiV1.GET("/pnbody/:id/inventory", h.GetUniverseInventory)
+		apiV1.GET("/pnbody/:id/heatmap", h.GetUniverseHeatmap)
+	}
+
+	// Support your legacy payload layout sent by hammer.go
+	router.POST("/api/pnbody/", h.HandleHammerRequest)
+}
+
+func (h *Handler) PNBodyIni(c *gin.Context) {
+	var req struct {
+		Width  int               `json:"width"`
+		Height int               `json:"height"`
+		Depth  int               `json:"depth"`
+		Recipe types.Multivector `json:"recipe"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 1. Create a clean legacy instance explicitly if this initialization endpoint is hit
+	id, _ := h.WorldManager.CreateUniverse(req.Width, req.Height, req.Depth)
+	world, _, _ := h.WorldManager.GetUniverse(id)
+
+	// 2. 🌟 TYPE ASSERTION: Safely assert onto the concrete legacy *engine.World struct
+	if v1World, ok := world.(*engine.World); ok {
+		v1World.HydratePillar(req.Width/2, req.Height/2, req.Depth/2, req.Recipe)
+		_ = h.WorldManager.UpdateUniverse(id, v1World)
+	} else {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to assert universe to legacy V1 layout"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"universe_id": id, "message": "Laboratory active"})
+}
+
+func (h *Handler) PNBodyByID(c *gin.Context) {
+	id := c.Param("id")
+	world, ok, _ := h.WorldManager.GetUniverse(id)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Universe missing"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"world": world})
+}
+
+func (h *Handler) HandleWaveSweepRequest(c *gin.Context) {
+	var cfg types.NBodyConfig
+	if err := c.ShouldBindJSON(&cfg); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	size := cfg.GridSize
+	if size == 0 {
+		size = 40
+	}
+
+	// 🎭 INSTANTIATE THE NEW V2 PLANCK ENGINE WORLD DIRECTLY
+	// 🎭 INSTANTIATE THE NEW V2 PLANCK ENGINE WORLD DIRECTLY
+	v2World := engine.NewV2World(
+		uuid.New().String(),
+		size, size, size,
+		cfg.KernelRadius,
+		cfg.PhaseRelaxationRate,
+		cfg.TwistFollowRate,
+		cfg.N,
+	)
+
+	// Determine Seeding Mode from unused config flags
+	// Let's repurpose N (0 = default formula, 1 = random, 2 = 50/50 split, 3 = even parity)
+	seedingMode := cfg.N
+
+	// Seeding Phase: Populate the coordinate theater based on selected macro profile
+	for x := 1; x < size-1; x++ {
+		for y := 1; y < size-1; y++ {
+			for z := 1; z < size-1; z++ {
+
+				var p types.Pixel
+
+				switch seedingMode {
+				case types.SeedingModeChaos: // 🎲 MODE 1: PURE QUANTUM CHAOS (Randomized Displacements)
+					// Use a deterministic pseudo-random sequence seeded by coordinates
+					hashSeed := int64(x*1000 + y*100 + z)
+					p = types.Pixel{
+						Alice: types.Pos{
+							X: (hashSeed % 71) - 35,
+							Y: ((hashSeed * 13) % 41) - 20,
+						},
+						Bob: types.Pos{
+							X: ((hashSeed * 7) % 31) - 15,
+							Y: -(((hashSeed * 23) % 51) - 25),
+						},
+						Destination: types.SharedState{
+							X: uint64(hashSeed % 3),
+							Y: uint64((hashSeed / 3) % 3),
+							Z: uint64((hashSeed / 9) % 3),
+						},
+					}
+
+				case types.SeedingModeSplit: // 🌗 MODE 2: THE 50/50 PHASE SPLIT (Directional Momentum Kick)
+					// Top half of the grid pulls left, bottom half pulls right
+					var bias int64 = 35
+					if x > size/2 {
+						bias = -35
+					}
+					p = types.Pixel{
+						Alice: types.Pos{
+							X: bias,
+							Y: int64(20 * math.Cos(float64(y)*0.3)),
+						},
+						Bob: types.Pos{
+							X: int64(15 * math.Sin(float64(z)*0.2)),
+							Y: -bias,
+						},
+						Destination: types.SharedState{
+							X: uint64(x % 3), Y: uint64(y % 3), Z: uint64(z % 3),
+						},
+					}
+
+				case types.SeedingModeParity: // 🦓 MODE 3: EVEN COORDINATE PARITY INTERLEAVING
+					// Only seeds rooms where components add up to an even lattice index
+					if (x+y+z)%2 == 0 {
+						p = types.Pixel{
+							Alice: types.Pos{
+								X: int64(45 * math.Sin(float64(x)*0.5)),
+								Y: int64(25 * math.Cos(float64(y)*0.3)),
+							},
+							Bob: types.Pos{
+								X: int64(20 * math.Sin(float64(z)*0.2)),
+								Y: int64(-30 * math.Cos(float64(x)*0.4)),
+							},
+							Destination: types.SharedState{
+								X: uint64(x % 3), Y: uint64(y % 3), Z: uint64(z % 3),
+							},
+						}
+					} // Odd coordinates stay at pure zeroed vacuum state
+
+				default: // 🧘 MODE 0: THE STANDARD INVARIANT CORE (Your baseline standing wave)
+					p = types.Pixel{
+						Alice: types.Pos{
+							X: int64(35 * math.Sin(float64(x)*0.5)),
+							Y: int64(20 * math.Cos(float64(y)*0.3)),
+						},
+						Bob: types.Pos{
+							X: int64(15 * math.Sin(float64(z)*0.2)),
+							Y: int64(-25 * math.Cos(float64(x)*0.4)),
+						},
+						Destination: types.SharedState{
+							X: uint64(x % 3), Y: uint64(y % 3), Z: uint64(z % 3),
+						},
+					}
+				}
+
+				v2World.SetPixel(x, y, z, p)
+			}
+		}
+	}
+
+	// Evolve world step transactions
+	for i := 0; i < cfg.Steps; i++ {
+		v2World.Step()
+	}
+
+	// Persist asynchronously to avoid blocking the network transaction [cite: 127]
+	go func(id string, w types.Universe) {
+		_ = h.WorldManager.UpdateUniverse(id, w)
+	}(v2World.ID, v2World)
+
+	// Fetch immediate status for synchronous return payload delivery
+	report := v2World.GenerateInventory(int64(cfg.Steps))
+
+	c.JSON(http.StatusOK, gin.H{
+		"universe_id": v2World.ID,
+		"engine_mode": "V2_PHASE_SPACE",
+		"result": gin.H{
+			"final_count":    report.OccupiedCells,
+			"max_mass":       report.MaxState,
+			"matter_pockets": report.PatternCount,
+		},
+	})
+}
+
+func (h *Handler) GetUniverseInventory(c *gin.Context) {
+	id := c.Param("id")
+	world, exists, _ := h.WorldManager.GetUniverse(id)
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Universe missing"})
+		return
+	}
+
+	// Compute current step (defaulted here for snapshot evaluation)
+	var currentStep int64 = 1000
+
+	// Check if this matches our V2 architecture blueprint
+	if v2, ok := world.(types.V2PlanckUniverse); ok {
+		// Type assertion succeeded: Route to the new tracker reporting layer
+		if concreteV2, isConcrete := v2.(*engine.V2World); isConcrete {
+			report := concreteV2.GenerateInventory(currentStep)
+			c.JSON(http.StatusOK, report)
+			return
+		}
+	}
+
+	// 📜 Fallback to legacy V1 Float layout tracking response logic if needed
+	c.JSON(http.StatusBadRequest, gin.H{"error": "Legacy V1 inventory fallback not refactored"})
+}
+func (h *Handler) RunSteps(c *gin.Context) {
+	id := c.Param("id")
+	stepsStr := c.DefaultQuery("count", "1")
+	steps, err := strconv.Atoi(stepsStr)
+	if err != nil || steps <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid count parameter"})
+		return
+	}
+
+	world, exists, _ := h.WorldManager.GetUniverse(id)
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Universe missing"})
+		return
+	}
+
+	// 🧵 Execute the Step loop directly on the interface token!
+	for i := 0; i < steps; i++ {
+		world.Step()
+	}
+
+	// Persist the updated state back to database storage cleanly
+	err = h.WorldManager.UpdateUniverse(id, world)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"universe_id":     id,
+		"steps_completed": steps,
+		"status":          "Evolution Success",
+	})
+}
+
+func (h *Handler) HandleHammerRequest(c *gin.Context) {
+	var cfg types.NBodyConfig
+	if err := c.ShouldBindJSON(&cfg); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	size := cfg.GridSize
+	if size == 0 {
+		size = 40
+	}
+
+	// Create a clean legacy instance explicitly if this endpoint is hit
+	universeID := uuid.New().String()
+	v1World := engine.NewWorld(universeID, size, size, size)
+
+	// Bind dynamic cosmic levers safely directly to the concrete object
+	v1World.RepulsionStrength = cfg.UnlikeMassRepulsionStrength
+	v1World.GravitySensitivity = cfg.GravitySensitivity
+	v1World.BaseMigrationRate = cfg.BaseMigrationRate
+	v1World.StickyClumpRate = cfg.StickyClumpRate
+
+	centerF := float64(size) / 2.0
+
+	// Dynamic Tracer Seeding
+	sun := types.TracerBody{
+		ID: "sun", IsMatter: true,
+		Position: [3]float64{centerF, centerF, centerF}, BaseMass: cfg.SunMass,
+	}
+	mercury := types.TracerBody{
+		ID: "mercury", IsMatter: cfg.MercuryIsMatter,
+		Position: [3]float64{centerF + 8.0, centerF, centerF}, Velocity: [3]float64{0, 0, cfg.MercuryVelocityZ},
+		BaseMass: cfg.MercuryMass,
+	}
+	v1World.Tracers = append(v1World.Tracers, sun, mercury)
+
+	// Save the initial footprint to the master store interface
+	_ = h.WorldManager.UpdateUniverse(universeID, &v1World)
+
+	// Evolve the system over time
+	fmt.Println("\n🪐 Launching Continuous Planetary Tracer Experiment:")
+	for i := 1; i <= cfg.Steps; i++ {
+		v1World.Step()
+
+		if i%50 == 0 && len(v1World.Tracers) >= 2 {
+			pM := v1World.Tracers[1].Position
+			vM := v1World.Tracers[1].Velocity
+			dx, dy, dz := pM[0]-centerF, pM[1]-centerF, pM[2]-centerF
+			distance := math.Sqrt(dx*dx + dy*dy + dz*dz)
+			fmt.Printf(" [Tick %3d] -> Mercury Position: (%5.2f, %5.2f, %5.2f) | Distance to Sun: %5.2f voxels | Speed: %5.3f\n",
+				i, pM[0], pM[1], pM[2], distance, math.Sqrt(vM[0]*vM[0]+vM[1]*vM[1]+vM[2]*vM[2]))
+		}
+	}
+
+	// Re-save post execution
+	_ = h.WorldManager.UpdateUniverse(universeID, &v1World)
+
+	// Audit final matrix status
+	var totalSurvivors int64 = 0
+	var maxObservedMass float64 = 0.0
+	for x := 0; x < v1World.Width; x++ {
+		for y := 0; y < v1World.Height; y++ {
+			for z := 0; z < v1World.Depth; z++ {
+				m := v1World.Cells[x][y][z].Fields.Matter() + v1World.Cells[x][y][z].Fields.Antimatter()
+				if m > 0.1 {
+					totalSurvivors++
+					if m > maxObservedMass {
+						maxObservedMass = m
+					}
+				}
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"id": time.Now().UnixNano() % 1000,
+		"result": gin.H{
+			"final_count":      totalSurvivors,
+			"max_mass":         maxObservedMass,
+			"matter_pockets":   int64(len(v1World.Tracers)),
+			"antimatter_voids": int64(0),
+		},
+	})
+}
+
+func (h *Handler) GetUniverseHeatmap(c *gin.Context) {
+	id := c.Param("id")
+	world, exists, _ := h.WorldManager.GetUniverse(id)
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Universe missing"})
+		return
+	}
+
+	// 1. Enforce high-performance V2 space verification
+	v2World, isV2 := world.(*engine.V2World)
+	if !isV2 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Heatmaps are exclusive to V2 discrete spaces"})
+		return
+	}
+
+	w, hDim, d := v2World.GetDimensions()
+
+	// 2. Extract slice coordinate parameter or default to exact midpoint plane
+	sliceStr := c.DefaultQuery("slice", strconv.Itoa(d/2))
+	sliceZ, err := strconv.Atoi(sliceStr)
+	if err != nil || sliceZ < 0 || sliceZ >= d {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Slice index out of bounds (0-%d)", d-1)})
+		return
+	}
+
+	// 3. Scan matrix bounds to find the maximum localized state for color scaling normalization
+	var maxObserved float64 = 1.0
+	for x := 0; x < w; x++ {
+		for y := 0; y < hDim; y++ {
+			p := v2World.GetPixel(x, y, sliceZ)
+			mag := math.Sqrt(float64(p.Alice.X*p.Alice.X + p.Alice.Y*p.Alice.Y + p.Bob.X*p.Bob.X + p.Bob.Y*p.Bob.Y))
+			if mag > maxObserved {
+				maxObserved = mag
+			}
+		}
+	}
+
+	// 4. Initialize native Go 2D image drawing canvas
+	upLeft := image.Point{0, 0}
+	lowRight := image.Point{w, hDim}
+	img := image.NewRGBA(image.Rectangle{Min: upLeft, Max: lowRight})
+
+	// 5. Compute the RGB Venn Overlap Matrix
+	for x := 0; x < w; x++ {
+		for y := 0; y < hDim; y++ {
+			p := v2World.GetPixel(x, y, sliceZ)
+
+			// Calculate individual vector magnitudes
+			aliceMag := math.Sqrt(float64(p.Alice.X*p.Alice.X + p.Alice.Y*p.Alice.Y))
+			bobMag := math.Sqrt(float64(p.Bob.X*p.Bob.X + p.Bob.Y*p.Bob.Y))
+
+			// Normalize scalars to standard 8-bit depth ranges (0-255)
+			rVal := uint8((aliceMag / maxObserved) * 255)
+			bVal := uint8((bobMag / maxObserved) * 255)
+
+			// Green Channel represents structural field intersection (Venn Diagram sweet spot)
+			// Multiply Alice and Bob magnitudes and scale to track alignment density spikes
+			overlapFactor := (aliceMag * bobMag) / (maxObserved * maxObserved)
+			gVal := uint8(overlapFactor * 255)
+
+			// If fields lock together into intense tension, light up the canvas with clear contrast
+			if aliceMag > 1000 && bobMag > 1000 {
+				img.Set(x, y, color.RGBA{R: rVal, G: 255, B: bVal, A: 255})
+			} else {
+				img.Set(x, y, color.RGBA{R: rVal, G: gVal, B: bVal, A: 255})
+			}
+		}
+	}
+
+	// 6. 🛡️ FIREWALL BUFFER: Write PNG to an in-memory buffer first to prevent file corruption
+	var imgBuffer bytes.Buffer
+	if err := png.Encode(&imgBuffer, img); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to compile PNG matrix payload"})
+		return
+	}
+
+	// Extract the clean, complete byte payload
+	pngBytes := imgBuffer.Bytes()
+
+	// Explicitly declare the exact content type and byte size to the incoming network adapter
+	c.Header("Content-Type", "image/png")
+	c.Header("Content-Length", strconv.Itoa(len(pngBytes)))
+
+	// Write the exact, uncorrupted byte stream down the socket line safely
+	c.Writer.WriteHeader(http.StatusOK)
+	_, _ = c.Writer.Write(pngBytes)
+}
+
+
+=== FILE: ./store/store.go ===
+package storage
+
+
+=== FILE: ./store/sqlite.go ===
+package storage
+
+import (
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/gojrs/para-nbody/engine"
+	"github.com/gojrs/para-nbody/types"
+	_ "github.com/mattn/go-sqlite3"
+)
+
+type SQLiteStore struct {
+	db *sql.DB
+}
+
+func NewSQLiteStore(path string) (*SQLiteStore, error) {
+	db, err := sql.Open("sqlite3", path)
+	if err != nil {
+		return nil, err
+	}
+
+	db.SetMaxOpenConns(1)
+	store := &SQLiteStore{db: db}
+
+	if err := store.init(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return store, nil
+}
+
+func (s *SQLiteStore) init() error {
+	statements := []string{
+		`PRAGMA journal_mode = WAL;`,
+		`PRAGMA synchronous = NORMAL;`,
+		`PRAGMA busy_timeout = 5000;`,
+		`PRAGMA foreign_keys = ON;`,
+		`CREATE TABLE IF NOT EXISTS universes (
+			id TEXT PRIMARY KEY,
+			width INTEGER NOT NULL,
+			height INTEGER NOT NULL,
+			depth INTEGER NOT NULL,
+			current_step INTEGER NOT NULL DEFAULT 0,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS chunk_0 (
+			universe_id TEXT NOT NULL,
+			step INTEGER NOT NULL,
+			payload BLOB NOT NULL,
+			created_at TEXT NOT NULL,
+			PRIMARY KEY (universe_id, step),
+			FOREIGN KEY (universe_id) REFERENCES universes(id) ON DELETE CASCADE
+		);`,
+	}
+	for _, statement := range statements {
+		if _, err := s.db.Exec(statement); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *SQLiteStore) Create(id string, world types.Universe) error {
+	if id == "" {
+		return fmt.Errorf("id is required")
+	}
+	if world == nil {
+		return fmt.Errorf("world is required")
+	}
+
+	payload, err := world.ToJSON()
+	if err != nil {
+		return fmt.Errorf("marshal interface world: %w", err)
+	}
+
+	w, h, d := world.GetDimensions()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(
+		`INSERT INTO universes (id, width, height, depth, current_step, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)`,
+		id, w, h, d, now, now,
+	); err != nil {
+		return fmt.Errorf("insert universe: %w", err)
+	}
+
+	if _, err := tx.Exec(
+		`INSERT INTO chunk_0 (universe_id, step, payload, created_at) VALUES (?, 0, ?, ?)`,
+		id, payload, now,
+	); err != nil {
+		return fmt.Errorf("insert chunk_0: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) Get(id string) (types.Universe, bool, error) {
+	if id == "" {
+		return nil, false, fmt.Errorf("id is required")
+	}
+
+	var currentStep int64
+	err := s.db.QueryRow(`SELECT current_step FROM universes WHERE id = ?`, id).Scan(&currentStep)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("select universe: %w", err)
+	}
+
+	var payload []byte
+	err = s.db.QueryRow(`SELECT payload FROM chunk_0 WHERE universe_id = ? AND step = ?`, id, currentStep).Scan(&payload)
+	if err == sql.ErrNoRows {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("select chunk_0: %w", err)
+	}
+
+	// 🕵️ Unmarshal Strategy: Because it's stored as flat JSON text, we safely unmarshal
+	// it into our high-performance V2World container by default.
+	var world engine.V2World
+	if err := json.Unmarshal(payload, &world); err != nil {
+		return nil, false, fmt.Errorf("unmarshal database world: %w", err)
+	}
+
+	return &world, true, nil
+}
+
+func (s *SQLiteStore) Update(id string, world types.Universe) error {
+	if id == "" {
+		return fmt.Errorf("id is required")
+	}
+	if world == nil {
+		return fmt.Errorf("world is required")
+	}
+
+	payload, err := world.ToJSON()
+	if err != nil {
+		return fmt.Errorf("marshal world interface: %w", err)
+	}
+
+	w, h, d := world.GetDimensions()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	var currentStep int64
+	err = tx.QueryRow(`SELECT current_step FROM universes WHERE id = ?`, id).Scan(&currentStep)
+	if err == sql.ErrNoRows {
+		return fmt.Errorf("universe %q not found", id)
+	}
+	if err != nil {
+		return fmt.Errorf("select current step: %w", err)
+	}
+
+	nextStep := currentStep + 1
+
+	if _, err := tx.Exec(`INSERT INTO chunk_0 (universe_id, step, payload, created_at) VALUES (?, ?, ?, ?)`, id, nextStep, payload, now); err != nil {
+		return fmt.Errorf("insert chunk_0 step: %w", err)
+	}
+
+	if _, err := tx.Exec(`UPDATE universes SET width = ?, height = ?, depth = ?, current_step = ?, updated_at = ? WHERE id = ?`, w, h, d, nextStep, now, id); err != nil {
+		return fmt.Errorf("update universe: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteStore) Delete(id string) error {
+	if id == "" {
+		return fmt.Errorf("id is required")
+	}
+	_, err := s.db.Exec(`DELETE FROM universes WHERE id = ?`, id)
+	return err
+}
+
+func (s *SQLiteStore) Close() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	return s.db.Close()
+}
+
+
+=== FILE: ./store/mem.go ===
+package storage
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/gojrs/para-nbody/types"
+	"github.com/jellydator/ttlcache/v3"
+)
+
+type TTLStore struct {
+	cache *ttlcache.Cache[string, types.Universe]
+}
+
+func NewTTLStore(ttl time.Duration) *TTLStore {
+	cache := ttlcache.New[string, types.Universe](
+		ttlcache.WithTTL[string, types.Universe](ttl),
+	)
+
+	go cache.Start()
+
+	return &TTLStore{
+		cache: cache,
+	}
+}
+
+func (s *TTLStore) Create(id string, world types.Universe) error {
+	if id == "" {
+		return fmt.Errorf("id is required")
+	}
+	if world == nil {
+		return fmt.Errorf("world is required")
+	}
+
+	s.cache.Set(id, world, ttlcache.DefaultTTL)
+	return nil
+}
+
+func (s *TTLStore) Get(id string) (types.Universe, bool, error) {
+	if id == "" {
+		return nil, false, fmt.Errorf("id is required")
+	}
+
+	item := s.cache.Get(id)
+	if item == nil || item.Value() == nil {
+		return nil, false, nil
+	}
+
+	return item.Value(), true, nil
+}
+
+func (s *TTLStore) Update(id string, world types.Universe) error {
+	if id == "" {
+		return fmt.Errorf("id is required")
+	}
+	if world == nil {
+		return fmt.Errorf("world is required")
+	}
+
+	s.cache.Set(id, world, ttlcache.DefaultTTL)
+	return nil
+}
+
+func (s *TTLStore) Delete(id string) error {
+	if id == "" {
+		return fmt.Errorf("id is required")
+	}
+	s.cache.Delete(id)
+	return nil
+}
+
+func (s *TTLStore) Close() error {
+	if s == nil || s.cache == nil {
+		return nil
+	}
+	s.cache.Stop()
+	return nil
+}
+
+

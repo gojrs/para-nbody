@@ -4,17 +4,17 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/gojrs/para-nbody/engine"
+	"github.com/gojrs/para-nbody/types"
 	"github.com/jellydator/ttlcache/v3"
 )
 
 type TTLStore struct {
-	cache *ttlcache.Cache[string, *engine.World]
+	cache *ttlcache.Cache[string, types.Universe]
 }
 
 func NewTTLStore(ttl time.Duration) *TTLStore {
-	cache := ttlcache.New[string, *engine.World](
-		ttlcache.WithTTL[string, *engine.World](ttl),
+	cache := ttlcache.New[string, types.Universe](
+		ttlcache.WithTTL[string, types.Universe](ttl),
 	)
 
 	go cache.Start()
@@ -24,7 +24,7 @@ func NewTTLStore(ttl time.Duration) *TTLStore {
 	}
 }
 
-func (s *TTLStore) Create(id string, world *engine.World) error {
+func (s *TTLStore) Create(id string, world types.Universe) error {
 	if id == "" {
 		return fmt.Errorf("id is required")
 	}
@@ -36,7 +36,7 @@ func (s *TTLStore) Create(id string, world *engine.World) error {
 	return nil
 }
 
-func (s *TTLStore) Get(id string) (*engine.World, bool, error) {
+func (s *TTLStore) Get(id string) (types.Universe, bool, error) {
 	if id == "" {
 		return nil, false, fmt.Errorf("id is required")
 	}
@@ -49,7 +49,7 @@ func (s *TTLStore) Get(id string) (*engine.World, bool, error) {
 	return item.Value(), true, nil
 }
 
-func (s *TTLStore) Update(id string, world *engine.World) error {
+func (s *TTLStore) Update(id string, world types.Universe) error {
 	if id == "" {
 		return fmt.Errorf("id is required")
 	}
@@ -65,7 +65,6 @@ func (s *TTLStore) Delete(id string) error {
 	if id == "" {
 		return fmt.Errorf("id is required")
 	}
-
 	s.cache.Delete(id)
 	return nil
 }
@@ -74,7 +73,6 @@ func (s *TTLStore) Close() error {
 	if s == nil || s.cache == nil {
 		return nil
 	}
-
 	s.cache.Stop()
 	return nil
 }

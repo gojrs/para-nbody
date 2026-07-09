@@ -55,4 +55,4 @@ gem:
 	find . -name "*.go" -not -path "*/.*" -exec sh -c 'for f; do echo "=== FILE: $f ==="; cat "$f"; echo "\n"; done' _ {} + > consolidated_code.txt
 
 git:
-	git add . && git commit -m "dual overlapping field start: why use 12 when 5 will do" && git push
+	git add . && git commit -m "Alice and Bob, with balance" && git push

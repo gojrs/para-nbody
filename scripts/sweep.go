@@ -54,7 +54,7 @@ func main() {
 				} `json:"result"`
 			}
 
-			if err := json.NewDecoder(resp.Body).Decode(&apiRes); err != nil {
+			if err = json.NewDecoder(resp.Body).Decode(&apiRes); err != nil {
 				resp.Body.Close()
 				continue
 			}

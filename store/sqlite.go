@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/gojrs/para-nbody/engine"
+	"github.com/gojrs/para-nbody/types"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -21,16 +22,12 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 	}
 
 	db.SetMaxOpenConns(1)
-
-	store := &SQLiteStore{
-		db: db,
-	}
+	store := &SQLiteStore{db: db}
 
 	if err := store.init(); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
-
 	return store, nil
 }
 
@@ -58,17 +55,15 @@ func (s *SQLiteStore) init() error {
 			FOREIGN KEY (universe_id) REFERENCES universes(id) ON DELETE CASCADE
 		);`,
 	}
-
 	for _, statement := range statements {
 		if _, err := s.db.Exec(statement); err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
-func (s *SQLiteStore) Create(id string, world *engine.World) error {
+func (s *SQLiteStore) Create(id string, world types.Universe) error {
 	if id == "" {
 		return fmt.Errorf("id is required")
 	}
@@ -76,11 +71,12 @@ func (s *SQLiteStore) Create(id string, world *engine.World) error {
 		return fmt.Errorf("world is required")
 	}
 
-	payload, err := json.Marshal(world)
+	payload, err := world.ToJSON()
 	if err != nil {
-		return fmt.Errorf("marshal world: %w", err)
+		return fmt.Errorf("marshal interface world: %w", err)
 	}
 
+	w, h, d := world.GetDimensions()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 
 	tx, err := s.db.Begin()
@@ -90,24 +86,15 @@ func (s *SQLiteStore) Create(id string, world *engine.World) error {
 	defer tx.Rollback()
 
 	if _, err := tx.Exec(
-		`INSERT INTO universes (id, width, height, depth, current_step, created_at, updated_at)
-		 VALUES (?, ?, ?, ?, 0, ?, ?)`,
-		id,
-		world.Width,
-		world.Height,
-		world.Depth,
-		now,
-		now,
+		`INSERT INTO universes (id, width, height, depth, current_step, created_at, updated_at) VALUES (?, ?, ?, ?, 0, ?, ?)`,
+		id, w, h, d, now, now,
 	); err != nil {
 		return fmt.Errorf("insert universe: %w", err)
 	}
 
 	if _, err := tx.Exec(
-		`INSERT INTO chunk_0 (universe_id, step, payload, created_at)
-		 VALUES (?, 0, ?, ?)`,
-		id,
-		payload,
-		now,
+		`INSERT INTO chunk_0 (universe_id, step, payload, created_at) VALUES (?, 0, ?, ?)`,
+		id, payload, now,
 	); err != nil {
 		return fmt.Errorf("insert chunk_0: %w", err)
 	}
@@ -115,16 +102,13 @@ func (s *SQLiteStore) Create(id string, world *engine.World) error {
 	return tx.Commit()
 }
 
-func (s *SQLiteStore) Get(id string) (*engine.World, bool, error) {
+func (s *SQLiteStore) Get(id string) (types.Universe, bool, error) {
 	if id == "" {
 		return nil, false, fmt.Errorf("id is required")
 	}
 
 	var currentStep int64
-	err := s.db.QueryRow(
-		`SELECT current_step FROM universes WHERE id = ?`,
-		id,
-	).Scan(&currentStep)
+	err := s.db.QueryRow(`SELECT current_step FROM universes WHERE id = ?`, id).Scan(&currentStep)
 	if err == sql.ErrNoRows {
 		return nil, false, nil
 	}
@@ -133,11 +117,7 @@ func (s *SQLiteStore) Get(id string) (*engine.World, bool, error) {
 	}
 
 	var payload []byte
-	err = s.db.QueryRow(
-		`SELECT payload FROM chunk_0 WHERE universe_id = ? AND step = ?`,
-		id,
-		currentStep,
-	).Scan(&payload)
+	err = s.db.QueryRow(`SELECT payload FROM chunk_0 WHERE universe_id = ? AND step = ?`, id, currentStep).Scan(&payload)
 	if err == sql.ErrNoRows {
 		return nil, false, nil
 	}
@@ -145,15 +125,17 @@ func (s *SQLiteStore) Get(id string) (*engine.World, bool, error) {
 		return nil, false, fmt.Errorf("select chunk_0: %w", err)
 	}
 
-	var world engine.World
+	// 🕵️ Unmarshal Strategy: Because it's stored as flat JSON text, we safely unmarshal
+	// it into our high-performance V2World container by default.
+	var world engine.V2World
 	if err := json.Unmarshal(payload, &world); err != nil {
-		return nil, false, fmt.Errorf("unmarshal world: %w", err)
+		return nil, false, fmt.Errorf("unmarshal database world: %w", err)
 	}
 
 	return &world, true, nil
 }
 
-func (s *SQLiteStore) Update(id string, world *engine.World) error {
+func (s *SQLiteStore) Update(id string, world types.Universe) error {
 	if id == "" {
 		return fmt.Errorf("id is required")
 	}
@@ -161,11 +143,12 @@ func (s *SQLiteStore) Update(id string, world *engine.World) error {
 		return fmt.Errorf("world is required")
 	}
 
-	payload, err := json.Marshal(world)
+	payload, err := world.ToJSON()
 	if err != nil {
-		return fmt.Errorf("marshal world: %w", err)
+		return fmt.Errorf("marshal world interface: %w", err)
 	}
 
+	w, h, d := world.GetDimensions()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 
 	tx, err := s.db.Begin()
@@ -175,10 +158,7 @@ func (s *SQLiteStore) Update(id string, world *engine.World) error {
 	defer tx.Rollback()
 
 	var currentStep int64
-	err = tx.QueryRow(
-		`SELECT current_step FROM universes WHERE id = ?`,
-		id,
-	).Scan(&currentStep)
+	err = tx.QueryRow(`SELECT current_step FROM universes WHERE id = ?`, id).Scan(&currentStep)
 	if err == sql.ErrNoRows {
 		return fmt.Errorf("universe %q not found", id)
 	}
@@ -188,28 +168,11 @@ func (s *SQLiteStore) Update(id string, world *engine.World) error {
 
 	nextStep := currentStep + 1
 
-	if _, err := tx.Exec(
-		`INSERT INTO chunk_0 (universe_id, step, payload, created_at)
-		 VALUES (?, ?, ?, ?)`,
-		id,
-		nextStep,
-		payload,
-		now,
-	); err != nil {
+	if _, err := tx.Exec(`INSERT INTO chunk_0 (universe_id, step, payload, created_at) VALUES (?, ?, ?, ?)`, id, nextStep, payload, now); err != nil {
 		return fmt.Errorf("insert chunk_0 step: %w", err)
 	}
 
-	if _, err := tx.Exec(
-		`UPDATE universes
-		 SET width = ?, height = ?, depth = ?, current_step = ?, updated_at = ?
-		 WHERE id = ?`,
-		world.Width,
-		world.Height,
-		world.Depth,
-		nextStep,
-		now,
-		id,
-	); err != nil {
+	if _, err := tx.Exec(`UPDATE universes SET width = ?, height = ?, depth = ?, current_step = ?, updated_at = ? WHERE id = ?`, w, h, d, nextStep, now, id); err != nil {
 		return fmt.Errorf("update universe: %w", err)
 	}
 
@@ -220,7 +183,6 @@ func (s *SQLiteStore) Delete(id string) error {
 	if id == "" {
 		return fmt.Errorf("id is required")
 	}
-
 	_, err := s.db.Exec(`DELETE FROM universes WHERE id = ?`, id)
 	return err
 }
@@ -229,6 +191,5 @@ func (s *SQLiteStore) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
-
 	return s.db.Close()
 }

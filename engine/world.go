@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"math"
 	"runtime"
 	"sync"
@@ -9,6 +10,7 @@ import (
 )
 
 type World struct {
+	ID                string                  `json:"id"` // 🌟 Added to satisfy types.Universe
 	Width             int                     `json:"width"`
 	Height            int                     `json:"height"`
 	Depth             int                     `json:"depth"`
@@ -20,17 +22,19 @@ type World struct {
 	GravitySensitivity  float64 `json:"gravity_sensitivity"`
 	BaseMigrationRate   float64 `json:"base_migration_rate"`
 	StickyClumpRate     float64 `json:"sticky_clump_rate"`
-	PhaseRelaxationRate float64 `json:"phase_relaxation_rate"` // 🌟 Parameterized
-	TwistFollowRate     float64 `json:"twist_follow_rate"`     // 🌟 Parameterized
+	PhaseRelaxationRate float64 `json:"phase_relaxation_rate"`
+	TwistFollowRate     float64 `json:"twist_follow_rate"`
 	KernelRadius        int     `json:"kernel_radius"`
+
 	// ✨ --- ENGINE V2 PLANCK RUNTIME FIELDS (DOUBLE BUFFERED) --- ✨
 	IsV2          bool                     `json:"is_v2"`
-	CellsV2       [][][]types.IntegerState `json:"cells_v2"`     // Current Read Buffer
-	CellsV2Buffer [][][]types.IntegerState `json:"cells_v2_buf"` // Next Write Buffer
+	CellsV2       [][][]types.IntegerState `json:"cells_v2"`
+	CellsV2Buffer [][][]types.IntegerState `json:"cells_v2_buf"`
 }
 
-func NewWorld(width, height, depth int) World {
+func NewWorld(id string, width, height, depth int) World {
 	world := World{
+		ID:                id, // 🌟 Bound here
 		Width:             width,
 		Height:            height,
 		Depth:             depth,
@@ -75,10 +79,7 @@ func (w *World) CloneCells() [][][]types.LedgerState {
 }
 
 func (w *World) Step() {
-	if w.IsV2 {
-		w.StepV2()
-		return
-	}
+
 	// 1. Only subtract mass from cells occupied by actual tracers
 	for _, tracer := range w.Tracers {
 		tx := int(math.Round(tracer.Position[0]))
@@ -130,15 +131,12 @@ func (w *World) Step() {
 		chunksPerAxis = 1
 	}
 
-	// 🎯 --- RECONCILED RADIUS EXTRACTION ---
-	// We establish the interaction radius once here so it can safely scale all thread constraints
 	radius := w.KernelRadius
 	if radius == 0 {
-		radius = 3 // Standard baseline fallback
+		radius = 3
 	}
 	attractionLimit := float64(radius) * (2.0 / 3.0)
 
-	// Threads must stay 'radius' steps away from structural array borders to prevent out-of-bounds reads
 	chunkDimX := int(math.Ceil(float64(w.Width-(radius*2)) / float64(chunksPerAxis)))
 	chunkDimY := int(math.Ceil(float64(w.Height-(radius*2)) / float64(chunksPerAxis)))
 	chunkDimZ := int(math.Ceil(float64(w.Depth-(radius*2)) / float64(chunksPerAxis)))
@@ -148,12 +146,10 @@ func (w *World) Step() {
 	const ConstructiveThreshold = 6.5
 	const DestructiveThreshold = -2.0
 
-	// Spawn the 3D chunk execution web
 	for cx := 0; cx < chunksPerAxis; cx++ {
 		for cy := 0; cy < chunksPerAxis; cy++ {
 			for cz := 0; cz < chunksPerAxis; cz++ {
 
-				// Slide the starting floors outward to match our radius padding requirement
 				startX := radius + (cx * chunkDimX)
 				endX := startX + chunkDimX
 				if endX > w.Width-radius {
@@ -180,13 +176,10 @@ func (w *World) Step() {
 				go func(sX, eX, sY, eY, sZ, eZ int) {
 					defer wg.Done()
 
-					// Loop bounds inside the thread can now use the parent scope's radius
-					// and attractionLimit safely with zero redeclarations!
 					for x := sX; x < eX; x++ {
 						for y := sY; y < eY; y++ {
 							for z := sZ; z < eZ; z++ {
 
-								// --- PASS 1: WAVE INTERFERENCE & SPIN-LOCK TRAPPING ---
 								cell := w.Cells[x][y][z]
 								var netInterference float64 = 0.0
 
@@ -208,7 +201,6 @@ func (w *World) Step() {
 									nextCells[x][y][z].Fields.Phase *= 0.5
 								}
 
-								// --- PASS 2: GEOMETRIC SURFACE DISTANCE IMPEDANCE & NEIGHBORHOOD ATTRACTION ---
 								mVal := nextCells[x][y][z].Fields.V[3]
 								aVal := nextCells[x][y][z].Fields.V[4]
 
@@ -222,7 +214,6 @@ func (w *World) Step() {
 									var pullX, pullY, pullZ float64
 									var elecX, elecY, elecZ float64
 
-									// Dynamic lookups executing down your scaled radius parameter bounds
 									for dxLocal := -radius; dxLocal <= radius; dxLocal++ {
 										for dyLocal := -radius; dyLocal <= radius; dyLocal++ {
 											for dzLocal := -radius; dzLocal <= radius; dzLocal++ {
@@ -233,7 +224,6 @@ func (w *World) Step() {
 													distSq := float64(dxLocal*dxLocal + dyLocal*dyLocal + dzLocal*dzLocal)
 
 													if distSq > 0 {
-														// Matter attraction filtering tethered directly to the limit scaling variable
 														if math.Abs(float64(dxLocal)) <= attractionLimit &&
 															math.Abs(float64(dyLocal)) <= attractionLimit &&
 															math.Abs(float64(dzLocal)) <= attractionLimit {
@@ -333,7 +323,6 @@ func (w *World) Step() {
 									}
 								}
 
-								// --- PASS 3: LATTICE PHASE RELAXATION ---
 								var netPhaseGlow float64 = 0.0
 								var neighborCount float64 = 0.0
 
@@ -362,7 +351,6 @@ func (w *World) Step() {
 
 	wg.Wait()
 
-	// 5. Boundary Sorting Phase
 	for x := 1; x < w.Width-1; x++ {
 		for y := 1; y < w.Height-1; y++ {
 			for z := 1; z < w.Depth-1; z++ {
@@ -391,7 +379,6 @@ func (w *World) Step() {
 
 	w.Cells = nextCells
 
-	// 6. Grid-to-Tracer Projection Phase
 	for idx := range w.Tracers {
 		tracer := &w.Tracers[idx]
 		tx := int(math.Round(tracer.Position[0]))
@@ -439,13 +426,10 @@ func (w *World) Step() {
 	}
 }
 
-// CalculateElectronProtonDistances finds the minimum 3D distance from every
-// materialized electron voxel to its closest proton core voxel.
 func (w *World) CalculateElectronProtonDistances() []float64 {
 	var protonCoords [][3]int
 	var electronCoords [][3]int
 
-	// 🎯 ENGINE V2 COUPLING REGISTER LOOKUP
 	if w.IsV2 {
 		for x := w.KernelRadius; x < w.Width-w.KernelRadius; x++ {
 			for y := w.KernelRadius; y < w.Height-w.KernelRadius; y++ {
@@ -454,7 +438,6 @@ func (w *World) CalculateElectronProtonDistances() []float64 {
 					tension := cell.CalculateTension()
 					charge := cell.CalculateCharge()
 
-					// Filter for stable integer clusters
 					if tension >= 12000 && charge > 2000 {
 						protonCoords = append(protonCoords, [3]int{x, y, z})
 					}
@@ -465,7 +448,6 @@ func (w *World) CalculateElectronProtonDistances() []float64 {
 			}
 		}
 	} else {
-		// 📜 Legacy Float Fallback Track
 		for x := 1; x < w.Width-1; x++ {
 			for y := 1; y < w.Height-1; y++ {
 				for z := 1; z < w.Depth-1; z++ {
@@ -504,4 +486,22 @@ func (w *World) CalculateElectronProtonDistances() []float64 {
 	}
 
 	return minDistances
+}
+
+// 🗑️ Old hardcoded w.StepV2() method stripped completely because it was replaced by engine.V2World!
+
+func (w *World) GetID() string { return w.ID }
+
+func (w *World) GetDimensions() (int, int, int) { return w.Width, w.Height, w.Depth }
+
+func (w *World) ToJSON() ([]byte, error) {
+	w.IsV2 = false
+	return json.Marshal(w)
+}
+
+func (w *World) GenerateInventory(step int64) types.SpectrumReport {
+	return types.SpectrumReport{
+		NumSteps:       step,
+		ActivePatterns: []types.PatternProfile{},
+	}
 }
