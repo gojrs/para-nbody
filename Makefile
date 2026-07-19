@@ -6,7 +6,7 @@ BIN := $(BIN_DIR)/$(APP_NAME)
 DB_PATH ?= ./dataset/para-nbody-v2.store
 STORE ?= ttl
 
-.PHONY: help build run run-sqlite run-ttl test clean reset-db tidy
+.PHONY: help build run run-sqlite run-ttl test test-v test-pkg clean reset-db tidy
 
 help:
 	@echo "Targets:"
@@ -15,6 +15,8 @@ help:
 	@echo "  make run-ttl     Build and run with TTL store"
 	@echo "  make run-sqlite  Build and run with SQLite store"
 	@echo "  make test        Run go test ./..."
+	@echo "  make test-v      Run go test -v ./... (Verbose tracking outputs)"
+	@echo "  make test-pkg    Run specific package tests (e.g., make test-pkg PKG=./types)"
 	@echo "  make tidy        Run go mod tidy"
 	@echo "  make clean       Remove ./bin"
 	@echo "  make reset-db    Remove SQLite DB/WAL/SHM files"
@@ -47,7 +49,19 @@ build-linux:
 	GOOS=linux GOARCH=amd64 go build -o $(BIN_DIR)/verify_v3-linux-amd64 ./cmd/verify_v3/main.go
 
 test:
-	go test ./...
+	@echo "🧪 Running tests while filtering out scripts..."
+	go test $$(go list ./... | grep -v '/scripts')
+
+test-v:
+	@echo "🧪 Running full test suite with verbose audit logs (excluding scripts)..."
+	go test -v $$(go list ./... | grep -v '/scripts')
+test-pkg:
+	@if [ -z "$(PKG)" ]; then \
+		echo "❌ Error: Please specify a package target. Example: make test-pkg PKG=./types"; \
+		exit 1; \
+	fi
+	@echo "🔬 Auditing isolated package domain: $(PKG)"
+	go test -v $(PKG)
 
 tidy:
 	go mod tidy

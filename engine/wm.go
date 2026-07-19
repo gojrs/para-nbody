@@ -26,12 +26,34 @@ func NewWorldManager(store UniverseStore) *WorldManager {
 	}
 }
 
-// CreateUniverse defaults to creating a V2World now, but outputs the universal interface token
+// CreateUniverse instantiates a clean V3World and outputs the universal interface token
 func (m *WorldManager) CreateUniverse(w, h, d int) (string, error) {
 	id := uuid.New().String()
 
-	// Defaulting to your high-performance discrete engine matrix
-	newWorld := NewV2World(id, w, h, d, 1, 0.0300, 0.0150, types.SeedingModeStandard)
+	// 🪐 Allocate nodes & establish your discrete V3 state machine grid layout
+	newWorld := &V3World{
+		ID:           id,
+		Width:        w,
+		Height:       h,
+		Depth:        d,
+		KernelRadius: 1, // Default safe interaction horizon bounds
+		Cells:        make([][][]types.Pixel, w),
+		Buffer:       make([][][]types.Pixel, w),
+	}
+
+	// Safely hydrate the 3D grid matrix slices to prevent runtime nil pointer panics
+	for x := 0; x < w; x++ {
+		newWorld.Cells[x] = make([][]types.Pixel, h)
+		newWorld.Buffer[x] = make([][]types.Pixel, h)
+		for y := 0; y < h; y++ {
+			newWorld.Cells[x][y] = make([]types.Pixel, d)
+			newWorld.Buffer[x][y] = make([]types.Pixel, d)
+			for z := 0; z < d; z++ {
+				// Seeds standard empty invariant core vacuum matrix coordinates
+				newWorld.Cells[x][y][z] = types.NewPixel(0, 0, 0, 0, 0, 0)
+			}
+		}
+	}
 
 	if err := m.store.Create(id, newWorld); err != nil {
 		return "", fmt.Errorf("create universe %q: %w", id, err)

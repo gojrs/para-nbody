@@ -805,14 +805,6 @@ func (n NeutrinoClass) CheckGeometry(mv Multivector) bool {
 }
 
 
-=== FILE: ./pnbody/engine.go ===
-package pnbody
-
-
-=== FILE: ./pnbody/base.go ===
-package pnbody
-
-
 === FILE: ./scripts/agent2.go ===
 package main
 
