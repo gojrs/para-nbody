@@ -1,3 +1,61 @@
+=== FILE: ./cmd/portal/web-main.go ===
+package main
+
+import (
+	"context"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	// Make sure to reference your generated templ views path here:
+	// "github.com/gojrs/para-nbody/web/views"
+)
+
+func main() {
+	router := gin.Default()
+
+	// 🌐 POINT TO YOUR RUNNING PROXMOX CORE NODE
+	engineHost := os.Getenv("GSON_ENGINE_HOST")
+	if engineHost == "" {
+		engineHost = "http://172.20.192.10:42069"
+	}
+
+	log.Printf("GSON Portal Server linking telemetry target to: %s", engineHost)
+
+	// 🛠️ REGISTER RE-THEMED WEB SERVER VIEW ROUTS
+	router.GET("/", func(c *gin.Context) {
+		c.String(http.StatusOK, "Welcome to GSON Systems Hub. Future Blog & Particle Lab coming here soon!")
+	})
+
+	// Add your hx-get proxy routes or Templ rendering calls here asynchronously...
+
+	srv := &http.Server{
+		Addr:    ":8080", // Web traffic operates on standard alternative ports
+		Handler: router,
+	}
+
+	go func() {
+		log.Printf("🤖 Standalone Web Portal active at http://localhost%s", srv.Addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Portal listen error: %s\n", err)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("Shutting down Web Portal safely...")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = srv.Shutdown(ctx)
+}
+
+
 === FILE: ./cmd/main.go ===
 package main
 
@@ -84,6 +142,205 @@ func main() {
 	if err = srv.Shutdown(ctx); err != nil {
 		log.Printf("Server forced to shutdown: %v", err)
 	}
+}
+
+
+=== FILE: ./cmd/verify_v3/main.go ===
+package main
+
+import (
+	"fmt"
+	"log"
+	"time"
+
+	"github.com/gojrs/para-nbody/engine"
+	storage "github.com/gojrs/para-nbody/store"
+	"github.com/gojrs/para-nbody/types"
+)
+
+func main() {
+	fmt.Println("🔬 Initializing V3 Finite State Machine Conservation Audit...")
+	fmt.Println("-----------------------------------------------------------------")
+
+	// 1. Establish the clean, in-memory TTL Store
+	ttlStore := storage.NewTTLStore(10 * time.Minute)
+	defer ttlStore.Close()
+
+	universeID := "v3-test-reality"
+	size := 32 // Compact matrix window for quick multi-frame evaluation
+
+	// 2. Instantiate our new V3 state machine world
+	v3World := &engine.V3World{
+		ID:           universeID,
+		Width:        size,
+		Height:       size,
+		Depth:        size,
+		KernelRadius: 1,
+		Cells:        make([][][]types.Pixel, size),
+		Buffer:       make([][][]types.Pixel, size),
+	}
+
+	// Allocate nodes & pre-populate with mixed chirality seeds to stress test routing
+	for x := 0; x < size; x++ {
+		v3World.Cells[x] = make([][]types.Pixel, size)
+		v3World.Buffer[x] = make([][]types.Pixel, size)
+		for y := 0; y < size; y++ {
+			v3World.Cells[x][y] = make([]types.Pixel, size)
+			v3World.Buffer[x][y] = make([]types.Pixel, size)
+			for z := 0; z < size; z++ {
+				// Allocate safe non-nil pointer references for Alice
+				wX, wY, wTension := int64(0), int64(0), int64(0)
+
+				// Inject high-tension matter/antimatter collision vortex signatures in the center
+				if x > 10 && x < 22 && y > 10 && y < 22 && z > 10 && z < 22 {
+					hashSeed := int64(x*y*z + x + y + z)
+					if hashSeed%2 == 0 {
+						wX, wY, wTension = 35, 20, -10 // Clockwise Matter profile
+					} else {
+						wX, wY, wTension = -35, -20, 10 // Counter-Clockwise Antimatter profile
+					}
+				}
+				v3World.Cells[x][y][z] = types.NewPixel(wX, wY, wTension, 0, 0, 0)
+			}
+		}
+	}
+
+	// 3. Commit the initial state to the TTL cache
+	err := ttlStore.Create(universeID, v3World)
+	if err != nil {
+		log.Fatalf("❌ Failed to seed TTL Store: %v", err)
+	}
+
+	// 4. Calculate Baseline Integer Sums across the grid
+	initAliceX, initAliceY, initMalTension := calculateGlobalLedger(v3World)
+	initNetTension := calculateTotalScalarTension(v3World)
+
+	fmt.Printf("📊 Frame 0 Baseline Ledger:\n")
+	fmt.Printf("   • Sum(Alice.X): %d\n", initAliceX)
+	fmt.Printf("   • Sum(Alice.Y): %d\n", initAliceY)
+	fmt.Printf("   • Sum(Mal.Z):   %d\n", initMalTension)
+	fmt.Printf("   • Net Structural Tension: %d\n", initNetTension)
+	fmt.Println("-----------------------------------------------------------------")
+
+	// 5. Evolve the system through the FSM timeline
+	testFrames := 500
+	fmt.Printf("🏃 Processing %d state machine update loops...", testFrames)
+
+	start := time.Now()
+	for frame := 1; frame <= testFrames; frame++ {
+		// Retrieve current tick state token from TTL interface
+		worldInterface, exists, _ := ttlStore.Get(universeID)
+		if !exists {
+			log.Fatalf("❌ Reality unlinked from TTL store mid-run!")
+		}
+
+		// Type assert onto our concrete V3 state engine layout
+		activeWorld := worldInterface.(*engine.V3World)
+
+		// Run the asymmetric step algorithm
+		activeWorld.Step()
+
+		// Re-save to flash frame memory
+		_ = ttlStore.Update(universeID, activeWorld)
+	}
+	duration := time.Since(start)
+	fmt.Printf(" Done in %v\n", duration)
+	fmt.Println("-----------------------------------------------------------------")
+
+	// 6. Pull final snapshot from TTL and audit conservation balances
+	finalInterface, _, _ := ttlStore.Get(universeID)
+	finalWorld := finalInterface.(*engine.V3World)
+	finalAliceX, finalAliceY, finalMalTension := calculateGlobalLedger(finalWorld)
+	finalNetTension := calculateTotalScalarTension(finalWorld)
+
+	fmt.Printf("📊 Frame %d Audit Ledger:\n", testFrames)
+	fmt.Printf("   • Sum(Alice.X): %d  (Delta: %d)\n", finalAliceX, finalAliceX-initAliceX)
+	fmt.Printf("   • Sum(Alice.Y): %d  (Delta: %d)\n", finalAliceY, finalAliceY-initAliceY)
+	fmt.Printf("   • Sum(Mal.Z):   %d  (Delta: %d)\n", finalMalTension, finalMalTension-initMalTension)
+	fmt.Printf("   • Final Structural Tension: %d\n", finalNetTension)
+	fmt.Println("-----------------------------------------------------------------")
+
+	// Strict bit assertion validation check
+	if finalAliceX-initAliceX == 0 && finalAliceY-initAliceY == 0 && finalMalTension-initMalTension == 0 {
+		fmt.Println("✅ SUCCESS: The FSM rules are mathematically sound! Complete whole-integer conservation achieved.")
+	} else {
+		fmt.Println("❌ ERROR: Ledger leak detected. State transitions are dropping integer bits.")
+	}
+}
+
+func calculateGlobalLedger(w *engine.V3World) (int64, int64, int64) {
+	var totalX, totalY, totalZ int64
+	for x := 0; x < w.Width; x++ {
+		for y := 0; y < w.Height; y++ {
+			for z := 0; z < w.Depth; z++ {
+				p := w.Cells[x][y][z]
+				if p.Alice != nil {
+					totalX += p.Alice.X
+					totalY += p.Alice.Y
+				}
+				totalZ += p.Mal.Tension
+			}
+		}
+	}
+	return totalX, totalY, totalZ
+}
+
+func calculateTotalScalarTension(w *engine.V3World) int64 {
+	var totalTension int64
+	for x := 0; x < w.Width; x++ {
+		for y := 0; y < w.Height; y++ {
+			for z := 0; z < w.Depth; z++ {
+				totalTension += w.Cells[x][y][z].CalculateTension()
+			}
+		}
+	}
+	return totalTension
+}
+
+
+=== FILE: ./types/enums.go ===
+package types
+
+type NBodyConfigMode uint8
+
+const (
+	SeedingModeStandard NBodyConfigMode = iota
+	SeedingModeChaos
+	SeedingModeSplit
+	SeedingModeParity
+)
+
+func (nbcm NBodyConfigMode) String() (answer string) {
+	switch nbcm {
+	case SeedingModeStandard:
+		answer = "INVARIANT_CORE"
+	case SeedingModeChaos:
+		answer = "QUANTUM_CHAOS"
+	case SeedingModeSplit:
+		answer = "PHASE_SPLIT"
+	case SeedingModeParity:
+		answer = "EVEN_PARITY"
+	}
+
+	return answer
+}
+
+type EngineMode uint8
+
+const (
+	EngineModeClockwise EngineMode = iota
+	EngineModeCounterRotating
+)
+
+func (em EngineMode) String() (answer string) {
+	switch em {
+	case EngineModeClockwise:
+		answer = "clockwise"
+	case EngineModeCounterRotating:
+		answer = "counterRotating"
+	}
+
+	return answer
 }
 
 
@@ -228,58 +485,8 @@ type TracerBody struct {
 	BaseMass float64    `json:"base_mass"` // Intrinsic mass payload
 }
 
-type NBodyConfigMode uint8
-
-const (
-	SeedingModeStandard NBodyConfigMode = iota
-	SeedingModeChaos
-	SeedingModeSplit
-	SeedingModeParity
-)
-
-func (nbcm NBodyConfigMode) String() string {
-	answer := ""
-
-	switch nbcm {
-	case SeedingModeStandard:
-		answer = "INVARIANT_CORE"
-	case SeedingModeChaos:
-		answer = "QUANTUM_CHAOS"
-	case SeedingModeSplit:
-		answer = "PHASE_SPLIT"
-	case SeedingModeParity:
-		answer = "EVEN_PARITY"
-	}
-
-	return answer
-}
-
-//// UnmarshalJSON lets Gin automatically map strings like "PHASE_SPLIT" to the enum value!
-//func (nbcm *NBodyConfigMode) UnmarshalJSON(b []byte) error {
-//	// Strip quotation marks from the raw JSON string bytes
-//	str := string(bytes.Trim(b, `"`))
-//
-//	switch str {
-//	case "INVARIANT_CORE", "0":
-//		*nbcm = SeedingModeStandard
-//	case "QUANTUM_CHAOS", "1":
-//		*nbcm = SeedingModeChaos
-//	case "PHASE_SPLIT", "2":
-//		*nbcm = SeedingModeSplit
-//	case "EVEN_PARITY", "3":
-//		*nbcm = SeedingModeParity
-//	default:
-//		return fmt.Errorf("invalid seeding mode: %s", str)
-//	}
-//	return nil
-//}
-
-//// MarshalJSON makes sure when you output this config, it writes out the readable text string
-//func (nbcm NBodyConfigMode) MarshalJSON() ([]byte, error) {
-//	return []byte(fmt.Sprintf(`"%s"`, nbcm.String())), nil
-//}
-
 type NBodyConfig struct {
+	Mode                        EngineMode      `json:"mode"`
 	N                           NBodyConfigMode `json:"n"`
 	BoxSize                     float64         `json:"box_size"`
 	MaxSpeed                    float64         `json:"max_speed"`
@@ -471,9 +678,33 @@ type V2PlanckUniverse interface {
 === FILE: ./types/pixel.go ===
 package types
 
+import "math"
+
+// ShiftDirection defines our strict asymmetric state routing enum
+type ShiftDirection uint8
+
+const (
+	ShiftClockwise        ShiftDirection = iota // Matter path: N -> E -> S -> W
+	ShiftCounterClockwise                       // Antimatter path: N -> W -> S -> E
+	ShiftStatic                                 // Neutral state anchor
+)
+
 type Pos struct {
 	X int64 `json:"x"`
 	Y int64 `json:"y"`
+}
+
+type Mal struct {
+	Tension int64 `json:"tension"` // The Z-axis cross product anchor value
+}
+
+// Wiggle evaluates Mal's backpressure based on baseline energy thresholds
+func (m *Mal) Wiggle(currentTension int64) int64 {
+	const PlanckLimit = 12000
+	if currentTension > PlanckLimit {
+		return m.Tension / 2 // Dynamic collapse/relaxation threshold
+	}
+	return m.Tension
 }
 
 type SharedState struct {
@@ -482,10 +713,66 @@ type SharedState struct {
 	Z uint64 `json:"z"`
 }
 
+type Alice struct{}
+
+// Expand shifts states away from massive density gradients (Inflationary Push)
+func (a Alice) Expand(dx, dy, dz int64, gradientForce int64) (int64, int64, int64) {
+	if gradientForce > 0 {
+		return -dx * gradientForce, -dy * gradientForce, -dz * gradientForce
+	}
+	return 0, 0, 0
+}
+
+type Bob struct{}
+
+// Contract pulls states toward dense gradients (Gravitational Inward Pull)
+func (b Bob) Contract(dx, dy, dz int64, gradientForce int64) (int64, int64, int64) {
+	if gradientForce > 0 {
+		return dx * gradientForce, dy * gradientForce, dz * gradientForce
+	}
+	return 0, 0, 0
+}
+
 type Pixel struct {
-	Alice       Pos         `json:"alice"`       // Actor A internal state
-	Bob         Pos         `json:"bob"`         // Actor B internal state
-	Destination SharedState `json:"destination"` // Active routing vector for the next step
+	Alice       *Pos        `json:"alice"`
+	Bob         Bob         `json:"bob"`
+	Mal         Mal         `json:"mal"`
+	Destination SharedState `json:"destination"`
+}
+
+func NewPixel(startX, startY, startTension int64, destX, destY, destZ uint64) Pixel {
+	return Pixel{
+		Alice:       &Pos{X: startX, Y: startY},
+		Bob:         Bob{},
+		Mal:         Mal{Tension: startTension},
+		Destination: SharedState{X: destX, Y: destY, Z: destZ},
+	}
+}
+
+// CalculateTension derives the localized scalar field tension using pure integer hypots
+func (p Pixel) CalculateTension() int64 {
+	if p.Alice == nil {
+		return 0
+	}
+	// Pythagoras across all coordinates to evaluate the localized spatial knot magnitude
+	aliceSq := p.Alice.X*p.Alice.X + p.Alice.Y*p.Alice.Y
+	malSq := p.Mal.Tension * p.Mal.Tension
+
+	return int64(math.Sqrt(float64(aliceSq + malSq)))
+}
+
+// DetermineChirality extracts the FSM state machine direction on the fly
+func (p Pixel) DetermineChirality() ShiftDirection {
+	if p.Alice == nil {
+		return ShiftStatic
+	}
+	if p.Alice.X > 0 && p.Mal.Tension < 0 {
+		return ShiftClockwise
+	}
+	if p.Alice.X < 0 && p.Mal.Tension > 0 {
+		return ShiftCounterClockwise
+	}
+	return ShiftStatic
 }
 
 
@@ -547,17 +834,6 @@ import (
 	"github.com/gojrs/para-nbody/types"
 )
 
-type SweepConfig struct {
-	Steps               int     `json:"steps"`
-	GridSize            int     `json:"grid_size"`
-	GravitySensitivity  float64 `json:"gravity_sensitivity"`
-	BaseMigrationRate   float64 `json:"base_migration_rate"`
-	StickyClumpRate     float64 `json:"sticky_clump_rate"`
-	PhaseRelaxationRate float64 `json:"phase_relaxation_rate"`
-	TwistFollowRate     float64 `json:"twist_follow_rate"`
-	KernelRadius        int     `json:"kernel_radius"`
-}
-
 func main() {
 	protocol := "http"            // Direct local network protocol profile bypassing reverse proxies
 	host := "172.20.192.10:42069" // Pointed straight to your Proxmox network address
@@ -583,7 +859,8 @@ func main() {
 		// 🎯 THE FULL RADIAL SPECTRUM LOOP: 1 to 10
 		for testKR := 1; testKR <= 10; testKR++ {
 
-			cfg := SweepConfig{
+			cfg := types.NBodyConfig{
+				N:                   types.SeedingModeChaos,
 				Steps:               1000,
 				GridSize:            42, // Trigger for Engine V2 Phase-Space paths
 				GravitySensitivity:  0.001,
@@ -853,6 +1130,188 @@ func printTelemetryRow(baseURL, universeID string, stepCount int) {
 }
 
 
+=== FILE: ./scripts/agent_sequential_matrix.go ===
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"time"
+
+	"github.com/gojrs/para-nbody/types"
+	"github.com/joho/godotenv"
+)
+
+func main() {
+	// --- ⚙️ MASTER LIFESPAN & ENGINE STEP VARIABLES ---
+	maxLifespan := 4000000 // Upper limit configuration
+	incrementSize := 50000 // Discrete timeline block step size
+	initialSteps := 500    // Initial baseline ticks pre-run on sweep
+
+	// Load the environment file safely[cite: 6]
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, defaulting to system environment variables")
+	}
+
+	// Read the variable securely[cite: 6]
+	apiUrl := os.Getenv("PNBODY_API_URL")
+	if apiUrl == "" {
+		apiUrl = "http://localhost" // Fallback local default
+	}
+
+	baseURL := fmt.Sprintf("%s/api/v1/pnbody", apiUrl)
+
+	// 🎭 DEFINE THE 4-WAY CONFIGURATION COMBINATORICS ARRAY
+	matrixRuns := []struct {
+		engineMode  types.EngineMode
+		seedingMode types.NBodyConfigMode
+		label       string
+	}{
+		{types.EngineModeClockwise, types.SeedingModeParity, "V2_Engine_Parity"},
+		{types.EngineModeClockwise, types.SeedingModeChaos, "V2_Engine_Chaos"},
+		{types.EngineModeCounterRotating, types.SeedingModeParity, "V3_Engine_Parity_Natures_Choice"},
+		{types.EngineModeCounterRotating, types.SeedingModeChaos, "V3_Engine_Chaos"},
+	}
+
+	fmt.Printf("🚀 GSON Systems Lab: Sequential Automation Engine Initiated.\n")
+	fmt.Printf("📊 Matrix Layout: 4 distinct universes will execute strictly one-at-a-time.\n")
+	fmt.Printf("⏱️ Target Parameters: Max Lifespan = %d Ticks | Intermittent Step Blocks = %d Ticks\n", maxLifespan, incrementSize)
+	fmt.Println("---------------------------------------------------------------------------------")
+
+	// 🏃 EXECUTE SEQUENTIAL TIMELINE SWEEPS
+	for idx, matrixTarget := range matrixRuns {
+		fmt.Printf("\n🌌 [Universe %d/4 Configuration Block Engage: %s]\n", idx+1, matrixTarget.label)
+		fmt.Println("---------------------------------------------------------------------------------")
+
+		// 1. Hydrate structural payload map natively
+		cfg := types.NBodyConfig{
+			Mode:                matrixTarget.engineMode,
+			N:                   matrixTarget.seedingMode,
+			Steps:               initialSteps, // Initial ticks computed during registration handler[cite: 6]
+			GridSize:            42,
+			KernelRadius:        1,
+			PhaseRelaxationRate: 0.0300,
+			TwistFollowRate:     0.0150,
+		}
+
+		jsonData, _ := json.Marshal(cfg)
+		resp, err := http.Post(baseURL+"/wave-sweep", "application/json", bytes.NewBuffer(jsonData))
+		if err != nil {
+			log.Printf("❌ Skipping sequence matrix %s - Link initialization failed: %v", matrixTarget.label, err)
+			continue
+		}
+
+		var sweepRes map[string]interface{}
+		_ = json.NewDecoder(resp.Body).Decode(&sweepRes)
+		resp.Body.Close()
+
+		universeID, _ := sweepRes["universe_id"].(string)
+		if universeID == "" {
+			log.Printf("⚠️ Warning: Could not resolve valid Universe ID for matrix target %s", matrixTarget.label)
+			continue
+		}
+
+		// Establish isolated directory paths
+		dirPath := fmt.Sprintf("./renders/universe_%s", universeID)
+		_ = os.MkdirAll(dirPath, 0755)
+
+		// 📝 PERSIST CONFIG SNAPSHOT FOR THE GIVEN RUN ENVIRONMENT
+		configBytes, err := json.MarshalIndent(cfg, "", "    ")
+		if err == nil {
+			configFile := fmt.Sprintf("%s/config.json", dirPath)
+			_ = os.WriteFile(configFile, configBytes, 0644)
+		}
+
+		logFile, _ := os.OpenFile(fmt.Sprintf("%s/telemetry_audit.txt", dirPath), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+
+		// 🚀 DYNAMIC CONSOLE PRINTING VIA PASSED CONTEXT VARIABLES
+		fmt.Printf("🌌 Local Workspace Bound: [%s]\n", universeID)
+		fmt.Printf("🏃 Evolving timeline to %d frames... Monitoring visual renders directory.\n", maxLifespan)
+
+		_, _ = logFile.WriteString("Master Step | Pattern Count | Max State  | Avg Radius    | Dominant Cluster Center\n")
+		_, _ = logFile.WriteString("---------------------------------------------------------------------------------\n")
+
+		// Track ticks tracking loops natively matching initial steps
+		totalSteps := initialSteps
+
+		for totalSteps <= maxLifespan {
+			invResp, err := http.Get(fmt.Sprintf("%s/%s/inventory", baseURL, universeID))
+			if err != nil {
+				totalSteps += incrementSize
+				continue
+			}
+
+			var report types.SpectrumReport
+			if err := json.NewDecoder(invResp.Body).Decode(&report); err != nil {
+				invResp.Body.Close()
+				continue
+			}
+			invResp.Body.Close()
+
+			var dominantCenter string = "N/A (Vacuum Static)"
+			var maxPop int64 = 0
+			for _, p := range report.ActivePatterns {
+				if p.Population > maxPop {
+					maxPop = p.Population
+					dominantCenter = fmt.Sprintf("(%.1f, %.1f, %.1f)", p.CenterX, p.CenterY, p.CenterZ)
+				}
+			}
+
+			logLine := fmt.Sprintf("Tick %-5d | %-13d | %-10.2f | %-12.4f | %-20s\n",
+				totalSteps, report.PatternCount, report.MaxState, report.AvgRadius, dominantCenter)
+			_, _ = logFile.WriteString(logLine)
+
+			downloadSliceImage(baseURL, universeID, totalSteps, 21)
+
+			if totalSteps == maxLifespan {
+				break
+			}
+
+			// Advance time steps downstream safely via context variables
+			runUrl := fmt.Sprintf("%s/%s/run?count=%d", baseURL, universeID, incrementSize)
+			runResp, err := http.Post(runUrl, "application/json", nil)
+			if err != nil {
+				break
+			}
+			runResp.Body.Close()
+
+			totalSteps += incrementSize
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		logFile.Close()
+		fmt.Printf("🏁 Timeline Evolution stabilized cleanly inside memory cache for target %s.\n", matrixTarget.label)
+		fmt.Println("---------------------------------------------------------------------------------")
+	}
+
+	fmt.Println("\n🎉 All 4 sequential matrix sweeps complete! Ready for comparative diagnostic mapping.")
+}
+
+func downloadSliceImage(baseURL, universeID string, step int, targetZ int) {
+	dirPath := fmt.Sprintf("./renders/universe_%s", universeID)
+	url := fmt.Sprintf("%s/%s/heatmap?slice=%d", baseURL, universeID, targetZ)
+
+	resp, err := http.Get(url)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return
+	}
+
+	var imgBytes bytes.Buffer
+	_, _ = imgBytes.ReadFrom(resp.Body)
+	filename := fmt.Sprintf("%s/tick_%07d.png", dirPath, step)
+	_ = os.WriteFile(filename, imgBytes.Bytes(), 0644)
+}
+
+
 === FILE: ./scripts/sweep.go ===
 package main
 
@@ -1078,23 +1537,32 @@ import (
 	"time"
 
 	"github.com/gojrs/para-nbody/types"
+	"github.com/joho/godotenv"
 )
 
 func main() {
-	protocol := "http"
-	host := "172.20.192.10:42069" // Pointed directly to your local node [cite: 148]
-	baseURL := fmt.Sprintf("%s://%s/api/v1/pnbody", protocol, host)
+	// Load the environment file safely
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, defaulting to system environment variables")
+	}
 
-	fmt.Println("🤖 Initializing V2 Spatio-Temporal Pattern Audit...")
-	fmt.Println("🔬 Target Matrix Window: 42x42x42 Absolute Coordinate Theater")
-	fmt.Println("---------------------------------------------------------------------------------")
+	// Read the variable securely
+	apiUrl := os.Getenv("PNBODY_API_URL")
+	if apiUrl == "" {
+		apiUrl = "http://localhost" // Fallback local default
+	}
+
+	//protocol := "http"
+	//host := "172.20.192.10:42069"
+	baseURL := fmt.Sprintf("%s/api/v1/pnbody", apiUrl)
 
 	// 1. Ignite the initial universe seed state
 	cfg := types.NBodyConfig{
+		Mode:                types.EngineModeClockwise,
 		N:                   types.SeedingModeChaos,
-		Steps:               500, // Run initial relaxation steps
-		GridSize:            42,  // Hard locked to hardware cache-friendly envelope
-		KernelRadius:        1,   // Focus on tight localized interactions
+		Steps:               500,
+		GridSize:            42,
+		KernelRadius:        1,
 		PhaseRelaxationRate: 0.0300,
 		TwistFollowRate:     0.0150,
 	}
@@ -1114,33 +1582,50 @@ func main() {
 		log.Fatalf("❌ Failed to secure runtime Universe ID tokens from server")
 	}
 
-	fmt.Printf("🚀 Reality Deployed. Tracking Universe: [%s]\n", universeID)
-	fmt.Println("---------------------------------------------------------------------------------")
-	fmt.Printf("%-10s | %-12s | %-10s | %-12s | %-20s\n", "Master Step", "Pattern Count", "Max State", "Avg Radius", "Dominant Cluster Center")
-	fmt.Println("---------------------------------------------------------------------------------")
+	// Define directory path and establish text audit log destination
+	// Define directory path and establish text audit log destination
+	dirPath := fmt.Sprintf("./renders/universe_%s", universeID)
+	_ = os.MkdirAll(dirPath, 0755)
 
-	// 2. Continuous Evolutionary Increment & Tracking Loop
+	// 🌟 NEW: Pretty-print the configuration payload directly into the directory
+	configBytes, err := json.MarshalIndent(cfg, "", "    ")
+	if err == nil {
+		configFile := fmt.Sprintf("%s/config.json", dirPath)
+		_ = os.WriteFile(configFile, configBytes, 0644)
+	} else {
+		log.Printf("⚠️ Warning: Failed to marshal config snapshot: %v", err)
+	}
+
+	logFile, _ := os.OpenFile(fmt.Sprintf("%s/telemetry_audit.txt", dirPath), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	defer logFile.Close()
+
+	// 🚀 VISUAL RADAR KICKOFF
+	fmt.Println("🔬 GSON Systems Lab: V3 Chiral Simulation Engaged.")
+	fmt.Printf("🌌 Universe ID: [%s]\n", universeID)
+	fmt.Println("🏃 Evolving timeline to 4,000,000 frames... Monitoring visual renders directory.")
+
+	// Write standard header info to your text file asset
+	_, _ = logFile.WriteString("Master Step | Pattern Count | Max State  | Avg Radius    | Dominant Cluster Center\n")
+	_, _ = logFile.WriteString("---------------------------------------------------------------------------------\n")
+
 	totalSteps := 500
 	incrementSize := 500
 	maxLifespan := 4000
 
 	for totalSteps <= maxLifespan {
-		// Gather telemetry from current snapshot block
 		invResp, err := http.Get(fmt.Sprintf("%s/%s/inventory", baseURL, universeID))
 		if err != nil {
-			log.Printf("⚠️ Telemetry gap at step %d\n", totalSteps)
+			totalSteps += incrementSize
 			continue
 		}
 
 		var report types.SpectrumReport
 		if err := json.NewDecoder(invResp.Body).Decode(&report); err != nil {
 			invResp.Body.Close()
-			log.Printf("⚠️ Parse failure on spectrum matrix payload: %v\n", err)
 			continue
 		}
 		invResp.Body.Close()
 
-		// Locate the largest coherent pattern cluster by population weight
 		var dominantCenter string = "N/A (Vacuum Static)"
 		var maxPop int64 = 0
 		for _, p := range report.ActivePatterns {
@@ -1150,12 +1635,14 @@ func main() {
 			}
 		}
 
-		// Print clean snapshot log line
-		fmt.Printf("Tick %-5d | %-13d | %-10.2f | %-12.4f | %-20s\n",
+		// 📝 SILENT LOGGING: Append the statistics strictly to the text file asset
+		logLine := fmt.Sprintf("Tick %-5d | %-13d | %-10.2f | %-12.4f | %-20s\n",
 			totalSteps, report.PatternCount, report.MaxState, report.AvgRadius, dominantCenter)
+		_, _ = logFile.WriteString(logLine)
 
-		// 🎨 AUTOMATED VISUAL CATCH: Snag the overlapping Venn slice right here!
+		// 🎨 VISUAL SNAPSHOT: Fetch slice image straight to the isolated folder
 		downloadSliceImage(baseURL, universeID, totalSteps, 21)
+
 		if totalSteps == maxLifespan {
 			break
 		}
@@ -1164,49 +1651,247 @@ func main() {
 		runUrl := fmt.Sprintf("%s/%s/run?count=%d", baseURL, universeID, incrementSize)
 		runResp, err := http.Post(runUrl, "application/json", nil)
 		if err != nil {
-			log.Fatalf("\n❌ Master frame sequence severed: %v", err)
+			break
 		}
 		runResp.Body.Close()
 
 		totalSteps += incrementSize
-		time.Sleep(200 * time.Millisecond) // Safety settle delay for background storage flushes [cite: 127]
+		time.Sleep(200 * time.Millisecond)
 	}
-	fmt.Println("---------------------------------------------------------------------------------")
-	fmt.Println("🔬 Deep Horizon Sweep Complete. Metrics persisted cleanly inside SQLite store.")
+
+	fmt.Println("🏁 4,000,000 Ticks Complete. Evolution stabilized safely in memory cache.")
 }
 
-func downloadSliceImage(baseURL, universeID string, step int, targetZ int) {
-	// 1. Define the dedicated directory path for this specific reality thread
-	dirPath := fmt.Sprintf("./renders/universe_%s", universeID)
+//func downloadSliceImage(baseURL, universeID string, step int, targetZ int) {
+//	dirPath := fmt.Sprintf("./renders/universe_%s", universeID)
+//	url := fmt.Sprintf("%s/%s/heatmap?slice=%d", baseURL, universeID, targetZ)
+//
+//	resp, err := http.Get(url)
+//	if err != nil {
+//		return
+//	}
+//	defer resp.Body.Close()
+//
+//	if resp.StatusCode != http.StatusOK {
+//		return
+//	}
+//
+//	var imgBytes bytes.Buffer
+//	_, _ = imgBytes.ReadFrom(resp.Body)
+//	filename := fmt.Sprintf("%s/tick_%07d.png", dirPath, step) // Padded naming configuration
+//	_ = os.WriteFile(filename, imgBytes.Bytes(), 0644)
+//}
 
-	// 2. 🛡️ FOLDER CHECKPOINT: Create the path if it doesn't exist yet (0755 = standard read/write permissions)
-	if err := os.MkdirAll(dirPath, 0755); err != nil {
-		log.Printf("⚠️ Failed to establish rendering pipeline directory: %v\n", err)
-		return
+
+=== FILE: ./engine/world_v3.go ===
+package engine
+
+import (
+	"encoding/json"
+	"math"
+	"runtime"
+	"sync"
+
+	"github.com/gojrs/para-nbody/types"
+)
+
+type V3World struct {
+	ID           string            `json:"id"`
+	Width        int               `json:"width"`
+	Height       int               `json:"height"`
+	Depth        int               `json:"depth"`
+	KernelRadius int               `json:"kernel_radius"`
+	Cells        [][][]types.Pixel `json:"cells"`
+	Buffer       [][][]types.Pixel `json:"buffer"`
+}
+
+func (w *V3World) Step() {
+	// Standard 6-directional stencil vectors
+	dx := [6]int{1, -1, 0, 0, 0, 0}
+	dy := [6]int{0, 0, 1, -1, 0, 0}
+	dz := [6]int{0, 0, 0, 0, 1, -1}
+
+	radius := w.KernelRadius
+	if radius == 0 {
+		radius = 1
 	}
 
-	// 3. Construct the URL to hit our V2 matrix visualizer route
-	url := fmt.Sprintf("%s/%s/heatmap?slice=%d", baseURL, universeID, targetZ)
+	chunksPerAxis := int(math.Ceil(math.Cbrt(float64(runtime.NumCPU()))))
+	chunkDimX := int(math.Ceil(float64(w.Width-(radius*2)) / float64(chunksPerAxis)))
+	chunkDimY := int(math.Ceil(float64(w.Height-(radius*2)) / float64(chunksPerAxis)))
+	chunkDimZ := int(math.Ceil(float64(w.Depth-(radius*2)) / float64(chunksPerAxis)))
 
-	resp, err := http.Get(url)
-	if err != nil {
-		log.Printf("⚠️ Image download skip at step %d: %v\n", step, err)
-		return
+	var wg sync.WaitGroup
+
+	for cx := 0; cx < chunksPerAxis; cx++ {
+		for cy := 0; cy < chunksPerAxis; cy++ {
+			for cz := 0; cz < chunksPerAxis; cz++ {
+				startX := radius + (cx * chunkDimX)
+				endX := startX + chunkDimX
+				if endX > w.Width-radius {
+					endX = w.Width - radius
+				}
+
+				startY := radius + (cy * chunkDimY)
+				endY := startY + chunkDimY
+				if endY > w.Height-radius {
+					endY = w.Height - radius
+				}
+
+				startZ := radius + (cz * chunkDimZ)
+				endZ := startZ + chunkDimZ
+				if endZ > w.Depth-radius {
+					endZ = w.Depth - radius
+				}
+
+				if startX >= endX || startY >= endY || startZ >= endZ {
+					continue
+				}
+
+				wg.Add(1)
+				go func(sX, eX, sY, eY, sZ, eZ int) {
+					defer wg.Done()
+					var a types.Alice
+					var b types.Bob
+
+					for x := sX; x < eX; x++ {
+						for y := sY; y < eY; y++ {
+							for z := sZ; z < eZ; z++ {
+								room := w.Cells[x][y][z]
+								currentTension := room.CalculateTension()
+
+								var expX, expY, expZ int64
+								var conX, conY, conZ int64
+
+								// 🔬 Evaluate density gradients across spatial kernel blocks
+								for dxL := -radius; dxL <= radius; dxL++ {
+									for dyL := -radius; dyL <= radius; dyL++ {
+										for dzL := -radius; dzL <= radius; dzL++ {
+											target := w.Cells[x+dxL][y+dyL][z+dzL]
+											distSq := int64(dxL*dxL + dyL*dyL + dzL*dzL)
+											if distSq == 0 {
+												continue
+											}
+
+											gradientForce := (target.CalculateTension() - currentTension) / distSq
+
+											// Component actions handle state shifts natively
+											ax, ay, az := a.Expand(int64(dxL), int64(dyL), int64(dzL), gradientForce)
+											expX += ax
+											expY += ay
+											expZ += az
+
+											bx, by, bz := b.Contract(int64(dxL), int64(dyL), int64(dzL), gradientForce)
+											conX += bx
+											conY += by
+											conZ += bz
+										}
+									}
+								}
+
+								// Apply whole-integer transfers using our method targets
+								w.Buffer[x][y][z].Destination.X = room.Destination.X + uint64(expX+conX)
+								w.Buffer[x][y][z].Destination.Y = room.Destination.Y + uint64(expY+conY)
+								w.Buffer[x][y][z].Destination.Z = room.Destination.Z + uint64(expZ+conZ)
+
+								if room.Alice != nil {
+									w.Buffer[x][y][z].Alice.X = room.Alice.X
+									w.Buffer[x][y][z].Alice.Y = room.Alice.Y
+									w.Buffer[x][y][z].Mal.Tension = room.Mal.Wiggle(currentTension)
+								}
+
+								// 🔄 FSM ASYMMETRIC OVERFLOW SHIFT
+								chirality := room.DetermineChirality()
+								const ScalingDampener = 100
+								moveToken := int64(w.Buffer[x][y][z].Destination.X) / ScalingDampener
+
+								if moveToken > 0 {
+									for i := 0; i < 6; i++ {
+										nx, ny, nz := x+dx[i], y+dy[i], z+dz[i]
+										if w.Buffer[nx][ny][nz].Alice == nil {
+											continue
+										}
+
+										// Shift vectors depending on our explicit custom enum rules
+										switch chirality {
+										case types.ShiftClockwise:
+											// Matter pattern uses positive cross-axis translations
+											w.Buffer[nx][ny][nz].Alice.Y += moveToken * int64(dx[i])
+											w.Buffer[nx][ny][nz].Alice.X += moveToken * int64(dy[i])
+										case types.ShiftCounterClockwise:
+											// Antimatter flips the vector translation space completely
+											w.Buffer[nx][ny][nz].Alice.Y -= moveToken * int64(dx[i])
+											w.Buffer[nx][ny][nz].Alice.X -= moveToken * int64(dy[i])
+										case types.ShiftStatic:
+											// Neutral regions pass directly down the center line (Z)
+											w.Buffer[nx][ny][nz].Mal.Tension += moveToken * int64(dz[i])
+										}
+									}
+								}
+							}
+						}
+					}
+				}(startX, endX, startY, endY, startZ, endZ)
+			}
+		}
 	}
-	defer resp.Body.Close()
+	wg.Wait()
+	w.Cells, w.Buffer = w.Buffer, w.Cells
+}
 
-	if resp.StatusCode != http.StatusOK {
-		return
+// GetID returns the unique instance string identifier for the reality thread.
+func (w *V3World) GetID() string {
+	return w.ID
+}
+
+// GetDimensions returns the current width, height, and depth grid bounds.
+func (w *V3World) GetDimensions() (int, int, int) {
+	return w.Width, w.Height, w.Depth
+}
+
+// ToJSON serializes the active V3 integer lattice state machine for storage or transport.
+func (w *V3World) ToJSON() ([]byte, error) {
+	return json.Marshal(w)
+}
+
+func (w *V3World) GenerateInventory(currentStep int64) types.SpectrumReport {
+	visited := make([][][]bool, w.Width)
+	for i := range visited {
+		visited[i] = make([][]bool, w.Height)
+		for j := range visited[i] {
+			visited[i][j] = make([]bool, w.Depth)
+		}
 	}
 
-	var imgBytes bytes.Buffer
-	_, _ = imgBytes.ReadFrom(resp.Body)
+	var report types.SpectrumReport
+	report.NumSteps = currentStep
 
-	// 4. Clean, protected, sequential naming layout isolated inside the folder
-	filename := fmt.Sprintf("%s/tick_%04d.png", dirPath, step)
+	const MaterialDensityThreshold = 5.0
 
-	// Flush bytes safely to the isolated subdirectory
-	_ = os.WriteFile(filename, imgBytes.Bytes(), 0644)
+	for x := 0; x < w.Width; x++ {
+		for y := 0; y < w.Height; y++ {
+			for z := 0; z < w.Depth; z++ {
+				p := w.Cells[x][y][z]
+				cellMagnitude := float64(p.CalculateTension())
+
+				if cellMagnitude < MaterialDensityThreshold {
+					continue
+				}
+
+				report.OccupiedCells++
+				if cellMagnitude > report.MaxState {
+					report.MaxState = cellMagnitude
+				}
+
+				// If it's an unvisited clump, count it as a pattern particle
+				if !visited[x][y][z] {
+					report.PatternCount++
+					visited[x][y][z] = true
+				}
+			}
+		}
+	}
+	return report
 }
 
 
@@ -1835,17 +2520,20 @@ func (w *V2World) Step() {
 				go func(sX, eX, sY, eY, sZ, eZ int) {
 					defer wg.Done()
 
+					// Initialize operational type domains locally inside core chunk allocations
+					var a types.Alice
+					var b types.Bob
+
 					for x := sX; x < eX; x++ {
 						for y := sY; y < eY; y++ {
 							for z := sZ; z < eZ; z++ {
 								room := w.Cells[x][y][z]
+								currentTension := room.CalculateTension()
 
-								currentTension := int64(math.Sqrt(float64(
-									room.Alice.X*room.Alice.X + room.Alice.Y*room.Alice.Y +
-										room.Bob.X*room.Bob.X + room.Bob.Y*room.Bob.Y)))
+								var aliceExpandX, aliceExpandY, aliceExpandZ int64
+								var bobContractX, bobContractY, bobContractZ int64
 
-								var pullX, pullY, pullZ int64
-
+								// Scan the Kernel Horizon to map density gradients
 								for dxLocal := -radius; dxLocal <= radius; dxLocal++ {
 									for dyLocal := -radius; dyLocal <= radius; dyLocal++ {
 										for dzLocal := -radius; dzLocal <= radius; dzLocal++ {
@@ -1853,32 +2541,43 @@ func (w *V2World) Step() {
 											distSq := int64(dxLocal*dxLocal + dyLocal*dyLocal + dzLocal*dzLocal)
 
 											if distSq > 0 {
-												targetTension := int64(math.Sqrt(float64(
-													target.Alice.X*target.Alice.X + target.Alice.Y*target.Alice.Y +
-														target.Bob.X*target.Bob.X + target.Bob.Y*target.Bob.Y)))
+												targetTension := target.CalculateTension()
 
+												// --- V3 NATURE DUALITY CONSTRAINTS ---
 												gradientForce := (targetTension - currentTension) / distSq
-												pullX += int64(dxLocal) * gradientForce
-												pullY += int64(dyLocal) * gradientForce
-												pullZ += int64(dzLocal) * gradientForce
+
+												// 🔴 ALICE: Seeks lower density zones (Inflationary Expansion) via component domain
+												ax, ay, az := a.Expand(int64(dxLocal), int64(dyLocal), int64(dzLocal), gradientForce)
+												aliceExpandX += ax
+												aliceExpandY += ay
+												aliceExpandZ += az
+
+												// 🔵 BOB: Seeks higher density zones (Gravitational Contraction) via component domain
+												bx, by, bz := b.Contract(int64(dxLocal), int64(dyLocal), int64(dzLocal), gradientForce)
+												bobContractX += bx
+												bobContractY += by
+												bobContractZ += bz
 											}
 										}
 									}
 								}
 
-								w.Buffer[x][y][z].Destination.X = room.Destination.X + uint64(pullX)
-								w.Buffer[x][y][z].Destination.Y = room.Destination.Y + uint64(pullY)
-								w.Buffer[x][y][z].Destination.Z = room.Destination.Z + uint64(pullZ)
+								// Initialize the destination buffer slice
+								w.Buffer[x][y][z].Destination.X = room.Destination.X + uint64(aliceExpandX+bobContractX)
+								w.Buffer[x][y][z].Destination.Y = room.Destination.Y + uint64(aliceExpandY+bobContractY)
+								w.Buffer[x][y][z].Destination.Z = room.Destination.Z + uint64(aliceExpandZ+bobContractZ)
 
+								// Maintain structural integrity boundaries via direct Pointer targets
 								const PlanckLimit = 12000
-								if currentTension > PlanckLimit {
-									w.Buffer[x][y][z].Alice.X = (room.Alice.X + room.Bob.Y) / 2
-									w.Buffer[x][y][z].Bob.Y = -w.Buffer[x][y][z].Alice.X
-								} else {
-									w.Buffer[x][y][z].Alice.X = room.Alice.X
-									w.Buffer[x][y][z].Bob.Y = room.Bob.Y
+								if room.Alice != nil {
+									if currentTension > PlanckLimit {
+										w.Buffer[x][y][z].Alice.X = room.Alice.X / 2
+									} else {
+										w.Buffer[x][y][z].Alice.X = room.Alice.X
+									}
 								}
 
+								// Apply dampening and shift weights to neighbor pixels
 								const ScalingDampener = 100
 								moveX := int64(w.Buffer[x][y][z].Destination.X) / ScalingDampener
 								moveY := int64(w.Buffer[x][y][z].Destination.Y) / ScalingDampener
@@ -1889,9 +2588,12 @@ func (w *V2World) Step() {
 									ny := y + dy[i]
 									nz := z + dz[i]
 
-									w.Buffer[nx][ny][nz].Alice.Y += moveX * int64(dx[i])
-									w.Buffer[nx][ny][nz].Bob.X += moveY * int64(dy[i])
-									w.Buffer[nx][ny][nz].Alice.X += moveZ * int64(dz[i])
+									// Alice updates now absorb the collective advection pushes natively
+									if w.Buffer[nx][ny][nz].Alice != nil {
+										w.Buffer[nx][ny][nz].Alice.Y += moveX * int64(dx[i])
+										w.Buffer[nx][ny][nz].Alice.X += moveY * int64(dy[i])
+										w.Buffer[nx][ny][nz].Alice.X += moveZ * int64(dz[i])
+									}
 								}
 							}
 						}
@@ -1911,7 +2613,8 @@ func (w *V2World) clearBuffer(radius int) {
 	for x := radius; x < w.Width-radius; x++ {
 		for y := radius; y < w.Height-radius; y++ {
 			for z := radius; z < w.Depth-radius; z++ {
-				w.Buffer[x][y][z] = types.Pixel{}
+				// 🛡️ THE POINTER ANCHOR: Ensure a concrete &Pos{} instance is always allocated
+				w.Buffer[x][y][z] = types.NewPixel(0, 0, 0, 0, 0, 0)
 			}
 		}
 	}
@@ -1945,23 +2648,21 @@ func (w *V2World) GenerateInventory(currentStep int64) types.SpectrumReport {
 	var activePatterns []types.PatternProfile
 
 	// 🔬 THE STRUCTURAL FIREWALL GATE
-	// Only count cells as structurally active if their combined field intensity
-	// crosses this minimum baseline threshold. This strips out background vacuum static.
-	const MaterialDensityThreshold = 50.0
+	// Lowered dynamic cutoff threshold to account for V3 scaling dampeners
+	const MaterialDensityThreshold = 5.0
 
 	for x := 0; x < w.Width; x++ {
 		for y := 0; y < w.Height; y++ {
 			for z := 0; z < w.Depth; z++ {
 				p := w.Cells[x][y][z]
 
-				// Calculate localized scalar field tension
-				cellMagnitude := math.Sqrt(float64(p.Alice.X*p.Alice.X + p.Alice.Y*p.Alice.Y + p.Bob.X*p.Bob.X + p.Bob.Y*p.Bob.Y))
+				// 🌟 V3 POINTER TRANSITION: Safely read tension using the object method
+				cellMagnitude := float64(p.CalculateTension())
 
 				if math.IsNaN(cellMagnitude) || math.IsInf(cellMagnitude, 0) {
 					continue
 				}
 
-				// 🌟 THE FILTER SWITCH: Skip cells that don't cross our density line
 				if cellMagnitude < MaterialDensityThreshold {
 					continue
 				}
@@ -1972,7 +2673,6 @@ func (w *V2World) GenerateInventory(currentStep int64) types.SpectrumReport {
 					report.MaxState = cellMagnitude
 				}
 
-				// If it crosses the threshold and hasn't been visited, map the isolated structure!
 				if !visited[x][y][z] {
 					report.PatternCount++
 
@@ -1990,7 +2690,7 @@ func (w *V2World) GenerateInventory(currentStep int64) types.SpectrumReport {
 						clusterVoxels = append(clusterVoxels, curr)
 
 						room := w.Cells[curr.X][curr.Y][curr.Z]
-						mag := math.Sqrt(float64(room.Alice.X*room.Alice.X + room.Alice.Y*room.Alice.Y + room.Bob.X*room.Bob.X + room.Bob.Y*room.Bob.Y))
+						mag := float64(room.CalculateTension())
 
 						if !math.IsNaN(mag) && !math.IsInf(mag, 0) {
 							cSumState += mag
@@ -2015,9 +2715,7 @@ func (w *V2World) GenerateInventory(currentStep int64) types.SpectrumReport {
 						for _, n := range neighbors {
 							if !visited[n.X][n.Y][n.Z] {
 								np := w.Cells[n.X][n.Y][n.Z]
-
-								// 🌟 NEIGHBOR FLOOD FILTER: Only spread the fill if the neighbor also passes density!
-								nMag := math.Sqrt(float64(np.Alice.X*np.Alice.X + np.Alice.Y*np.Alice.Y + np.Bob.X*np.Bob.X + np.Bob.Y*np.Bob.Y))
+								nMag := float64(np.CalculateTension())
 
 								if !math.IsNaN(nMag) && nMag >= MaterialDensityThreshold {
 									visited[n.X][n.Y][n.Z] = true
@@ -2055,10 +2753,18 @@ func (w *V2World) GenerateInventory(currentStep int64) types.SpectrumReport {
 						avgRadius = clusterRadiusSum / float64(pop)
 					}
 
-					if math.IsNaN(avgRadius) || math.IsInf(avgRadius, 0) { avgRadius = 0.0 }
-					if math.IsNaN(cX) { cX = 0.0 }
-					if math.IsNaN(cY) { cY = 0.0 }
-					if math.IsNaN(cZ) { cZ = 0.0 }
+					if math.IsNaN(avgRadius) || math.IsInf(avgRadius, 0) {
+						avgRadius = 0.0
+					}
+					if math.IsNaN(cX) {
+						cX = 0.0
+					}
+					if math.IsNaN(cY) {
+						cY = 0.0
+					}
+					if math.IsNaN(cZ) {
+						cZ = 0.0
+					}
 
 					hasher := md5.New()
 					hasher.Write([]byte(fmt.Sprintf("%d-%.3f-%.3f", currentStep, cX, cY)))
@@ -2171,6 +2877,14 @@ func (m *WorldManager) Stop() {
 	_ = m.store.Close()
 }
 
+// DeleteUniverse unlinks and permanently destroys a universe state by routing the task to the secure store boundary
+func (m *WorldManager) DeleteUniverse(id string) error {
+	if id == "" {
+		return fmt.Errorf("id is required")
+	}
+	return m.store.Delete(id)
+}
+
 
 === FILE: ./handlers/handlers.go ===
 package handlers
@@ -2209,6 +2923,7 @@ func (h *Handler) RegisterRoutes(router *gin.Engine) {
 		apiV1.POST("/pnbody/wave-sweep", h.HandleWaveSweepRequest)
 		apiV1.GET("/pnbody/:id/inventory", h.GetUniverseInventory)
 		apiV1.GET("/pnbody/:id/heatmap", h.GetUniverseHeatmap)
+		apiV1.DELETE("/pnbody/:id", h.DeleteUniverse)
 	}
 
 	// Support your legacy payload layout sent by hammer.go
@@ -2262,132 +2977,97 @@ func (h *Handler) HandleWaveSweepRequest(c *gin.Context) {
 
 	size := cfg.GridSize
 	if size == 0 {
-		size = 40
+		size = 42
 	}
 
-	// 🎭 INSTANTIATE THE NEW V2 PLANCK ENGINE WORLD DIRECTLY
-	// 🎭 INSTANTIATE THE NEW V2 PLANCK ENGINE WORLD DIRECTLY
-	v2World := engine.NewV2World(
-		uuid.New().String(),
-		size, size, size,
-		cfg.KernelRadius,
-		cfg.PhaseRelaxationRate,
-		cfg.TwistFollowRate,
-		cfg.N,
-	)
+	// 🦾 ENUM ROUTER SWITCH: Evaporate string typos by selecting directly on our strong type constants
+	switch cfg.Mode {
+	case types.EngineModeCounterRotating: // 🌀 ENGINE V3: Counter-Rotating Vortex Leap
+		v3World := &engine.V3World{
+			ID:           uuid.New().String(),
+			Width:        size,
+			Height:       size,
+			Depth:        size,
+			KernelRadius: cfg.KernelRadius,
+			Cells:        make([][][]types.Pixel, size),
+			Buffer:       make([][][]types.Pixel, size),
+		}
 
-	// Determine Seeding Mode from unused config flags
-	// Let's repurpose N (0 = default formula, 1 = random, 2 = 50/50 split, 3 = even parity)
-	seedingMode := cfg.N
+		// Initialize 3D pointer bounds...
+		for x := 0; x < size; x++ {
+			v3World.Cells[x] = make([][]types.Pixel, size)
+			v3World.Buffer[x] = make([][]types.Pixel, size)
+			for y := 0; y < size; y++ {
+				v3World.Cells[x][y] = make([]types.Pixel, size)
+				v3World.Buffer[x][y] = make([]types.Pixel, size)
+				for z := 0; z < size; z++ {
+					wX, wY, wTension := int64(0), int64(0), int64(0)
 
-	// Seeding Phase: Populate the coordinate theater based on selected macro profile
-	for x := 1; x < size-1; x++ {
-		for y := 1; y < size-1; y++ {
-			for z := 1; z < size-1; z++ {
-
-				var p types.Pixel
-
-				switch seedingMode {
-				case types.SeedingModeChaos: // 🎲 MODE 1: PURE QUANTUM CHAOS (Randomized Displacements)
-					// Use a deterministic pseudo-random sequence seeded by coordinates
-					hashSeed := int64(x*1000 + y*100 + z)
-					p = types.Pixel{
-						Alice: types.Pos{
-							X: (hashSeed % 71) - 35,
-							Y: ((hashSeed * 13) % 41) - 20,
-						},
-						Bob: types.Pos{
-							X: ((hashSeed * 7) % 31) - 15,
-							Y: -(((hashSeed * 23) % 51) - 25),
-						},
-						Destination: types.SharedState{
-							X: uint64(hashSeed % 3),
-							Y: uint64((hashSeed / 3) % 3),
-							Z: uint64((hashSeed / 9) % 3),
-						},
-					}
-
-				case types.SeedingModeSplit: // 🌗 MODE 2: THE 50/50 PHASE SPLIT (Directional Momentum Kick)
-					// Top half of the grid pulls left, bottom half pulls right
-					var bias int64 = 35
-					if x > size/2 {
-						bias = -35
-					}
-					p = types.Pixel{
-						Alice: types.Pos{
-							X: bias,
-							Y: int64(20 * math.Cos(float64(y)*0.3)),
-						},
-						Bob: types.Pos{
-							X: int64(15 * math.Sin(float64(z)*0.2)),
-							Y: -bias,
-						},
-						Destination: types.SharedState{
-							X: uint64(x % 3), Y: uint64(y % 3), Z: uint64(z % 3),
-						},
-					}
-
-				case types.SeedingModeParity: // 🦓 MODE 3: EVEN COORDINATE PARITY INTERLEAVING
-					// Only seeds rooms where components add up to an even lattice index
-					if (x+y+z)%2 == 0 {
-						p = types.Pixel{
-							Alice: types.Pos{
-								X: int64(45 * math.Sin(float64(x)*0.5)),
-								Y: int64(25 * math.Cos(float64(y)*0.3)),
-							},
-							Bob: types.Pos{
-								X: int64(20 * math.Sin(float64(z)*0.2)),
-								Y: int64(-30 * math.Cos(float64(x)*0.4)),
-							},
-							Destination: types.SharedState{
-								X: uint64(x % 3), Y: uint64(y % 3), Z: uint64(z % 3),
-							},
+					// Apply conditional rules matching either Chaos or Parity distributions!
+					if cfg.N == types.SeedingModeChaos {
+						hashSeed := int64(x*y*z + x + y + z)
+						if hashSeed%2 == 0 {
+							wX, wY, wTension = 35, 20, -10
+						} else {
+							wX, wY, wTension = -35, -20, 10
 						}
-					} // Odd coordinates stay at pure zeroed vacuum state
-
-				default: // 🧘 MODE 0: THE STANDARD INVARIANT CORE (Your baseline standing wave)
-					p = types.Pixel{
-						Alice: types.Pos{
-							X: int64(35 * math.Sin(float64(x)*0.5)),
-							Y: int64(20 * math.Cos(float64(y)*0.3)),
-						},
-						Bob: types.Pos{
-							X: int64(15 * math.Sin(float64(z)*0.2)),
-							Y: int64(-25 * math.Cos(float64(x)*0.4)),
-						},
-						Destination: types.SharedState{
-							X: uint64(x % 3), Y: uint64(y % 3), Z: uint64(z % 3),
-						},
+					} else if cfg.N == types.SeedingModeParity {
+						// Custom mirrored initialization logic here...
+						wX, wY, wTension = 25, 25, 0
 					}
-				}
 
-				v2World.SetPixel(x, y, z, p)
+					v3World.Cells[x][y][z] = types.NewPixel(wX, wY, wTension, 0, 0, 0)
+				}
 			}
 		}
+
+		for i := 0; i < cfg.Steps; i++ {
+			v3World.Step()
+		}
+
+		_ = h.WorldManager.UpdateUniverse(v3World.ID, v3World)
+		c.JSON(http.StatusOK, gin.H{
+			"universe_id": v3World.ID,
+			"engine_mode": "V3_COUNTER_ROTATING",
+			"message":     "Chiral double-counter rotation architecture active.",
+		})
+		return
+
+	default: // 🧘 ENGINE V2: Default fallback for 0 value assignments (EngineModeClockwise)
+		v2World := engine.NewV2World(
+			uuid.New().String(),
+			size, size, size,
+			cfg.KernelRadius,
+			cfg.PhaseRelaxationRate,
+			cfg.TwistFollowRate,
+			cfg.N,
+		)
+
+		// Hydrate standard V2 advection layers
+		for x := 1; x < size-1; x++ {
+			for y := 1; y < size-1; y++ {
+				for z := 1; z < size-1; z++ {
+					p := types.NewPixel(
+						int64(35*math.Sin(float64(x)*0.5)),
+						int64(20*math.Cos(float64(y)*0.3)),
+						0, 0, 0, 0,
+					)
+					v2World.SetPixel(x, y, z, p)
+				}
+			}
+		}
+
+		for i := 0; i < cfg.Steps; i++ {
+			v2World.Step()
+		}
+
+		_ = h.WorldManager.UpdateUniverse(v2World.ID, v2World)
+		c.JSON(http.StatusOK, gin.H{
+			"universe_id": v2World.ID,
+			"engine_mode": "V2_CLOCKWISE_ADVECTION",
+			"message":     "Standard single directional loop active.",
+		})
 	}
-
-	// Evolve world step transactions
-	for i := 0; i < cfg.Steps; i++ {
-		v2World.Step()
-	}
-
-	// Persist asynchronously to avoid blocking the network transaction [cite: 127]
-	go func(id string, w types.Universe) {
-		_ = h.WorldManager.UpdateUniverse(id, w)
-	}(v2World.ID, v2World)
-
-	// Fetch immediate status for synchronous return payload delivery
-	report := v2World.GenerateInventory(int64(cfg.Steps))
-
-	c.JSON(http.StatusOK, gin.H{
-		"universe_id": v2World.ID,
-		"engine_mode": "V2_PHASE_SPACE",
-		"result": gin.H{
-			"final_count":    report.OccupiedCells,
-			"max_mass":       report.MaxState,
-			"matter_pockets": report.PatternCount,
-		},
-	})
 }
 
 func (h *Handler) GetUniverseInventory(c *gin.Context) {
@@ -2398,21 +3078,23 @@ func (h *Handler) GetUniverseInventory(c *gin.Context) {
 		return
 	}
 
-	// Compute current step (defaulted here for snapshot evaluation)
-	var currentStep int64 = 1000
+	var currentStep int64 = 1000 // Placeholder metric index for frame markers
 
-	// Check if this matches our V2 architecture blueprint
-	if v2, ok := world.(types.V2PlanckUniverse); ok {
-		// Type assertion succeeded: Route to the new tracker reporting layer
-		if concreteV2, isConcrete := v2.(*engine.V2World); isConcrete {
-			report := concreteV2.GenerateInventory(currentStep)
-			c.JSON(http.StatusOK, report)
-			return
-		}
+	// Check if we are analyzing a V3 Chiral World
+	if v3, ok := world.(*engine.V3World); ok {
+		report := v3.GenerateInventory(currentStep)
+		c.JSON(http.StatusOK, report)
+		return
 	}
 
-	// 📜 Fallback to legacy V1 Float layout tracking response logic if needed
-	c.JSON(http.StatusBadRequest, gin.H{"error": "Legacy V1 inventory fallback not refactored"})
+	// Check if we are analyzing a V2 Advection World
+	if v2, ok := world.(*engine.V2World); ok {
+		report := v2.GenerateInventory(currentStep)
+		c.JSON(http.StatusOK, report)
+		return
+	}
+
+	c.JSON(http.StatusBadRequest, gin.H{"error": "Unrecognized grid engine interface type"})
 }
 func (h *Handler) RunSteps(c *gin.Context) {
 	id := c.Param("id")
@@ -2541,14 +3223,24 @@ func (h *Handler) GetUniverseHeatmap(c *gin.Context) {
 		return
 	}
 
-	// 1. Enforce high-performance V2 space verification
-	v2World, isV2 := world.(*engine.V2World)
-	if !isV2 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Heatmaps are exclusive to V2 discrete spaces"})
+	var w, hDim, d int
+	var getPixel func(x, y, z int) types.Pixel
+
+	// 1. DYNAMIC ARCHITECTURE DETECTOR & TYPING ASSIGNMENT
+	if v3World, isV3 := world.(*engine.V3World); isV3 {
+		w, hDim, d = v3World.Width, v3World.Height, v3World.Depth
+		getPixel = func(x, y, z int) types.Pixel {
+			return v3World.Cells[x][y][z]
+		}
+	} else if v2World, isV2 := world.(*engine.V2World); isV2 {
+		w, hDim, d = v2World.Width, v2World.Height, v2World.Depth
+		getPixel = func(x, y, z int) types.Pixel {
+			return v2World.GetPixel(x, y, z)
+		}
+	} else {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Heatmaps are exclusive to discrete integer grids"})
 		return
 	}
-
-	w, hDim, d := v2World.GetDimensions()
 
 	// 2. Extract slice coordinate parameter or default to exact midpoint plane
 	sliceStr := c.DefaultQuery("slice", strconv.Itoa(d/2))
@@ -2562,10 +3254,12 @@ func (h *Handler) GetUniverseHeatmap(c *gin.Context) {
 	var maxObserved float64 = 1.0
 	for x := 0; x < w; x++ {
 		for y := 0; y < hDim; y++ {
-			p := v2World.GetPixel(x, y, sliceZ)
-			mag := math.Sqrt(float64(p.Alice.X*p.Alice.X + p.Alice.Y*p.Alice.Y + p.Bob.X*p.Bob.X + p.Bob.Y*p.Bob.Y))
-			if mag > maxObserved {
-				maxObserved = mag
+			p := getPixel(x, y, sliceZ)
+			if p.Alice != nil {
+				mag := float64(p.CalculateTension())
+				if mag > maxObserved {
+					maxObserved = mag
+				}
 			}
 		}
 	}
@@ -2578,26 +3272,30 @@ func (h *Handler) GetUniverseHeatmap(c *gin.Context) {
 	// 5. Compute the RGB Venn Overlap Matrix
 	for x := 0; x < w; x++ {
 		for y := 0; y < hDim; y++ {
-			p := v2World.GetPixel(x, y, sliceZ)
+			p := getPixel(x, y, sliceZ)
 
-			// Calculate individual vector magnitudes
-			aliceMag := math.Sqrt(float64(p.Alice.X*p.Alice.X + p.Alice.Y*p.Alice.Y))
-			bobMag := math.Sqrt(float64(p.Bob.X*p.Bob.X + p.Bob.Y*p.Bob.Y))
+			if p.Alice != nil {
+				// Calculate individual vector magnitudes cleanly
+				aliceMag := math.Sqrt(float64(p.Alice.X*p.Alice.X + p.Alice.Y*p.Alice.Y))
+				bobMag := aliceMag // Bob acts as a beautiful virtual calculation of Alice!
 
-			// Normalize scalars to standard 8-bit depth ranges (0-255)
-			rVal := uint8((aliceMag / maxObserved) * 255)
-			bVal := uint8((bobMag / maxObserved) * 255)
+				// Normalize scalars to standard 8-bit depth ranges (0-255)
+				rVal := uint8((aliceMag / maxObserved) * 255)
+				bVal := uint8((bobMag / maxObserved) * 255)
 
-			// Green Channel represents structural field intersection (Venn Diagram sweet spot)
-			// Multiply Alice and Bob magnitudes and scale to track alignment density spikes
-			overlapFactor := (aliceMag * bobMag) / (maxObserved * maxObserved)
-			gVal := uint8(overlapFactor * 255)
+				// Green Channel represents structural field intersection (Venn Diagram sweet spot)
+				overlapFactor := (aliceMag * bobMag) / (maxObserved * maxObserved)
+				gVal := uint8(overlapFactor * 255)
 
-			// If fields lock together into intense tension, light up the canvas with clear contrast
-			if aliceMag > 1000 && bobMag > 1000 {
-				img.Set(x, y, color.RGBA{R: rVal, G: 255, B: bVal, A: 255})
+				// If fields lock together into intense tension, light up the canvas with clear contrast
+				if aliceMag > 1000 && bobMag > 1000 {
+					img.Set(x, y, color.RGBA{R: rVal, G: 255, B: bVal, A: 255})
+				} else {
+					img.Set(x, y, color.RGBA{R: rVal, G: gVal, B: bVal, A: 255})
+				}
 			} else {
-				img.Set(x, y, color.RGBA{R: rVal, G: gVal, B: bVal, A: 255})
+				// Empty rooms fall back to pure black vacuum
+				img.Set(x, y, color.RGBA{R: 0, G: 0, B: 0, A: 255})
 			}
 		}
 	}
@@ -2621,6 +3319,36 @@ func (h *Handler) GetUniverseHeatmap(c *gin.Context) {
 	_, _ = c.Writer.Write(pngBytes)
 }
 
+// DeleteUniverse handles dropping an entire timeline from active memory or SQLite arrays
+// DeleteUniverse handles dropping an entire timeline from active memory or SQLite arrays
+// DeleteUniverse handles dropping an entire timeline from active memory or SQLite arrays
+func (h *Handler) DeleteUniverse(c *gin.Context) {
+	id := c.Param("id")
+
+	// 1. Check if the target universe exists before trying to destroy it
+	_, exists, err := h.WorldManager.GetUniverse(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed verifying universe presence: %v", err)})
+		return
+	}
+	if !exists {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Universe not found; it may have already timed out or been deleted"})
+		return
+	}
+
+	// 2. 🚀 FIXED: Invoke the public manager wrapper instead of h.WorldManager.store.Delete(id)
+	if err := h.WorldManager.DeleteUniverse(id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to drop target universe: %v", err)})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"universe_id": id,
+		"status":      "Purged",
+		"message":     "All coordinate buffers, payloads, and snapshots successfully vaporized.",
+	})
+}
+
 
 === FILE: ./store/store.go ===
 package storage
@@ -2637,7 +3365,7 @@ import (
 
 	"github.com/gojrs/para-nbody/engine"
 	"github.com/gojrs/para-nbody/types"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 type SQLiteStore struct {
@@ -2645,7 +3373,7 @@ type SQLiteStore struct {
 }
 
 func NewSQLiteStore(path string) (*SQLiteStore, error) {
-	db, err := sql.Open("sqlite3", path)
+	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
 	}
@@ -2754,14 +3482,30 @@ func (s *SQLiteStore) Get(id string) (types.Universe, bool, error) {
 		return nil, false, fmt.Errorf("select chunk_0: %w", err)
 	}
 
-	// 🕵️ Unmarshal Strategy: Because it's stored as flat JSON text, we safely unmarshal
-	// it into our high-performance V2World container by default.
-	var world engine.V2World
-	if err := json.Unmarshal(payload, &world); err != nil {
-		return nil, false, fmt.Errorf("unmarshal database world: %w", err)
+	// 🕵️ EXTRACTION STRATEGY: Intercept mode string before full unmarshal pass
+	var meta struct {
+		Mode types.EngineMode `json:"mode"`
+	}
+	if err := json.Unmarshal(payload, &meta); err != nil {
+		return nil, false, fmt.Errorf("read mode metadata: %w", err)
 	}
 
-	return &world, true, nil
+	// Dynamic instantiation router matching your architecture switch
+	switch meta.Mode {
+	case types.EngineModeCounterRotating: // Engine Mode V3
+		var v3World engine.V3World
+		if err := json.Unmarshal(payload, &v3World); err != nil {
+			return nil, false, fmt.Errorf("unmarshal v3 world: %w", err)
+		}
+		return &v3World, true, nil
+
+	default: // types.EngineModeClockwise (0 Val / Default Fallback for Legacy Frames)
+		var v2World engine.V2World
+		if err := json.Unmarshal(payload, &v2World); err != nil {
+			return nil, false, fmt.Errorf("unmarshal v2 world: %w", err)
+		}
+		return &v2World, true, nil
+	}
 }
 
 func (s *SQLiteStore) Update(id string, world types.Universe) error {

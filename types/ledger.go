@@ -138,58 +138,8 @@ type TracerBody struct {
 	BaseMass float64    `json:"base_mass"` // Intrinsic mass payload
 }
 
-type NBodyConfigMode uint8
-
-const (
-	SeedingModeStandard NBodyConfigMode = iota
-	SeedingModeChaos
-	SeedingModeSplit
-	SeedingModeParity
-)
-
-func (nbcm NBodyConfigMode) String() string {
-	answer := ""
-
-	switch nbcm {
-	case SeedingModeStandard:
-		answer = "INVARIANT_CORE"
-	case SeedingModeChaos:
-		answer = "QUANTUM_CHAOS"
-	case SeedingModeSplit:
-		answer = "PHASE_SPLIT"
-	case SeedingModeParity:
-		answer = "EVEN_PARITY"
-	}
-
-	return answer
-}
-
-//// UnmarshalJSON lets Gin automatically map strings like "PHASE_SPLIT" to the enum value!
-//func (nbcm *NBodyConfigMode) UnmarshalJSON(b []byte) error {
-//	// Strip quotation marks from the raw JSON string bytes
-//	str := string(bytes.Trim(b, `"`))
-//
-//	switch str {
-//	case "INVARIANT_CORE", "0":
-//		*nbcm = SeedingModeStandard
-//	case "QUANTUM_CHAOS", "1":
-//		*nbcm = SeedingModeChaos
-//	case "PHASE_SPLIT", "2":
-//		*nbcm = SeedingModeSplit
-//	case "EVEN_PARITY", "3":
-//		*nbcm = SeedingModeParity
-//	default:
-//		return fmt.Errorf("invalid seeding mode: %s", str)
-//	}
-//	return nil
-//}
-
-//// MarshalJSON makes sure when you output this config, it writes out the readable text string
-//func (nbcm NBodyConfigMode) MarshalJSON() ([]byte, error) {
-//	return []byte(fmt.Sprintf(`"%s"`, nbcm.String())), nil
-//}
-
 type NBodyConfig struct {
+	Mode                        EngineMode      `json:"mode"`
 	N                           NBodyConfigMode `json:"n"`
 	BoxSize                     float64         `json:"box_size"`
 	MaxSpeed                    float64         `json:"max_speed"`

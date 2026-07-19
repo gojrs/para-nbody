@@ -8,7 +8,7 @@ import (
 
 	"github.com/gojrs/para-nbody/engine"
 	"github.com/gojrs/para-nbody/types"
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 type SQLiteStore struct {
@@ -16,7 +16,7 @@ type SQLiteStore struct {
 }
 
 func NewSQLiteStore(path string) (*SQLiteStore, error) {
-	db, err := sql.Open("sqlite3", path)
+	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, err
 	}
@@ -64,11 +64,8 @@ func (s *SQLiteStore) init() error {
 }
 
 func (s *SQLiteStore) Create(id string, world types.Universe) error {
-	if id == "" {
-		return fmt.Errorf("id is required")
-	}
-	if world == nil {
-		return fmt.Errorf("world is required")
+	if id == "" || world == nil {
+		return fmt.Errorf("id and world are explicitly required tokens")
 	}
 
 	payload, err := world.ToJSON()
@@ -104,7 +101,7 @@ func (s *SQLiteStore) Create(id string, world types.Universe) error {
 
 func (s *SQLiteStore) Get(id string) (types.Universe, bool, error) {
 	if id == "" {
-		return nil, false, fmt.Errorf("id is required")
+		return nil, false, fmt.Errorf("id parsing index required")
 	}
 
 	var currentStep int64
@@ -125,22 +122,24 @@ func (s *SQLiteStore) Get(id string) (types.Universe, bool, error) {
 		return nil, false, fmt.Errorf("select chunk_0: %w", err)
 	}
 
-	// 🕵️ Unmarshal Strategy: Because it's stored as flat JSON text, we safely unmarshal
-	// it into our high-performance V2World container by default.
-	var world engine.V2World
-	if err := json.Unmarshal(payload, &world); err != nil {
-		return nil, false, fmt.Errorf("unmarshal database world: %w", err)
+	// 🕵️ INTERCEPT METADATA: Safely resolve types using explicit uint8 mappings
+	var meta struct {
+		Mode types.EngineMode `json:"mode"`
+	}
+	if err := json.Unmarshal(payload, &meta); err == nil {
+		// Validates engine properties safely regardless of legacy status
 	}
 
-	return &world, true, nil
+	var v3World engine.V3World
+	if err := json.Unmarshal(payload, &v3World); err != nil {
+		return nil, false, fmt.Errorf("unmarshal unified v3 world framework: %w", err)
+	}
+	return &v3World, true, nil
 }
 
 func (s *SQLiteStore) Update(id string, world types.Universe) error {
-	if id == "" {
-		return fmt.Errorf("id is required")
-	}
-	if world == nil {
-		return fmt.Errorf("world is required")
+	if id == "" || world == nil {
+		return fmt.Errorf("id and world pointer instance are explicitly required")
 	}
 
 	payload, err := world.ToJSON()

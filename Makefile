@@ -27,6 +27,12 @@ build:
 	@mkdir -p $(BIN_DIR)
 	go build -o $(BIN) $(CMD_DIR)
 
+portal:
+	@echo "🎨 Compiling Standalone Embedded Web Portal..."
+	# Run templ compiler generation first before wrapping the binary
+	templ generate
+	go build -o bin/gson-portal ./cmd/portal/web-main.go
+
 run: build
 	PNBODY_STORE=$(STORE) PNBODY_DB=$(DB_PATH) $(BIN)
 
@@ -37,7 +43,8 @@ run-sqlite: build
 	PNBODY_STORE=sqlite PNBODY_DB=$(DB_PATH) $(BIN)
 
 build-linux:
-	GOOS=linux GOARCH=amd64 go build -o $(BIN)-linux-amd64 $(CMD_DIR)
+	@mkdir -p $(BIN_DIR)
+	GOOS=linux GOARCH=amd64 go build -o $(BIN_DIR)/verify_v3-linux-amd64 ./cmd/verify_v3/main.go
 
 test:
 	go test ./...
@@ -55,4 +62,4 @@ gem:
 	find . -name "*.go" -not -path "*/.*" -exec sh -c 'for f; do echo "=== FILE: $f ==="; cat "$f"; echo "\n"; done' _ {} + > consolidated_code.txt
 
 git:
-	git add . && git commit -m "Alice and Bob, with balance" && git push
+	git add . && git commit -m "clean up v3" && git push

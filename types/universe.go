@@ -5,8 +5,8 @@ package types
 type Universe interface {
 	GetID() string
 	GetDimensions() (int, int, int)
-	Step()                   // Increments the master clock cycle by 1 tick
-	ToJSON() ([]byte, error) // Serializes the entire world space for disk storage
+	Step()
+	ToJSON() ([]byte, error)
 	GenerateInventory(step int64) SpectrumReport
 }
 
@@ -15,11 +15,4 @@ type V1WaveUniverse interface {
 	Universe
 	HydratePillar(x, y, z int, recipe Multivector)
 	CalculateElectronProtonDistances() []float64
-}
-
-// V2PlanckUniverse exposes the clean, discrete value assignments of your new entity framework.
-type V2PlanckUniverse interface {
-	Universe
-	GetPixel(x, y, z int) Pixel
-	SetPixel(x, y, z int, p Pixel)
 }

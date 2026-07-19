@@ -11,17 +11,6 @@ import (
 	"github.com/gojrs/para-nbody/types"
 )
 
-type SweepConfig struct {
-	Steps               int     `json:"steps"`
-	GridSize            int     `json:"grid_size"`
-	GravitySensitivity  float64 `json:"gravity_sensitivity"`
-	BaseMigrationRate   float64 `json:"base_migration_rate"`
-	StickyClumpRate     float64 `json:"sticky_clump_rate"`
-	PhaseRelaxationRate float64 `json:"phase_relaxation_rate"`
-	TwistFollowRate     float64 `json:"twist_follow_rate"`
-	KernelRadius        int     `json:"kernel_radius"`
-}
-
 func main() {
 	protocol := "http"            // Direct local network protocol profile bypassing reverse proxies
 	host := "172.20.192.10:42069" // Pointed straight to your Proxmox network address
@@ -47,7 +36,8 @@ func main() {
 		// 🎯 THE FULL RADIAL SPECTRUM LOOP: 1 to 10
 		for testKR := 1; testKR <= 10; testKR++ {
 
-			cfg := SweepConfig{
+			cfg := types.NBodyConfig{
+				N:                   types.SeedingModeChaos,
 				Steps:               1000,
 				GridSize:            42, // Trigger for Engine V2 Phase-Space paths
 				GravitySensitivity:  0.001,
